@@ -5,11 +5,11 @@
   (+ *x 1))
 
 (defn literals []
-  [1 1.5 "hi" true false])
+  [1 2 3])
 
 (defn kitchen-sink [n]
   (let [flag true
-        arr [1 2 [3 4]]
+        arr [1 2 3 4]
         p (new Pair)]
     (if flag
       (loop [i 0] (< i n) (+ i 1) (+ i (field p a)))

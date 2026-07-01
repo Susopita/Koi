@@ -41,7 +41,7 @@ fn compile_to_value(source: &str) -> serde_json::Value {
 }
 
 fn test_programs_dir() -> std::path::PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../test_programs")
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("../test/casos_prueba_carp")
 }
 
 #[test]

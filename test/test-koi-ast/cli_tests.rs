@@ -58,7 +58,7 @@ fn valid_program_exits_zero_and_writes_schema_valid_json() {
     let _ = fs::remove_file(AST_JSON);
 
     let manifest_dir = env!("CARGO_MANIFEST_DIR");
-    let input = format!("{manifest_dir}/../test_programs/add.carp");
+    let input = format!("{manifest_dir}/../test/casos_prueba_carp/add.carp");
 
     let output = Command::new(BIN)
         .arg(&input)
