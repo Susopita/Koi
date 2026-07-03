@@ -13,6 +13,7 @@ pub enum BuiltinKind {
     Print,
     Malloc,
     Free,
+    SetIndex,
 }
 
 pub fn builtin_kind(name: &str) -> Option<BuiltinKind> {
@@ -24,11 +25,12 @@ pub fn builtin_kind(name: &str) -> Option<BuiltinKind> {
         "print" => Some(BuiltinKind::Print),
         "malloc" => Some(BuiltinKind::Malloc),
         "free" => Some(BuiltinKind::Free),
+        "aset!" => Some(BuiltinKind::SetIndex),
         _ => None,
     }
 }
 
 pub const BUILTIN_NAMES: &[&str] = &[
     "+", "-", "*", "/", "<", "<=", ">", ">=", "==", "!=", "&&", "||", "!", "print", "malloc",
-    "free",
+    "free", "aset!",
 ];

@@ -1,0 +1,12 @@
+; NOTA: No tengo un toolchain de Carp disponible en este entorno para
+; compilar y validar este archivo. La sintaxis sigue los ejemplos de la
+; documentación oficial (carp-lang.github.io/carp-docs), pero verifíquenla
+; contra `carp --check fib.carp` antes de usarla en el benchmark real.
+
+(defn fib [n]
+  (if (< n 2)
+    n
+    (+ (fib (- n 1)) (fib (- n 2)))))
+
+(defn main []
+  (println* &(fib 32)))

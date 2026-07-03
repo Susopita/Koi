@@ -1,0 +1,9 @@
+; Sintaxis real de koi (defn, if, recursion). Ya coincide con la gramática
+; implementada por koi-ast (ver koi-ast/src/parser.rs) sin ajustes necesarios.
+(defn fib [n]
+  (if (< n 2)
+      n
+      (+ (fib (- n 1)) (fib (- n 2)))))
+
+(defn main []
+  (print (fib 32)))

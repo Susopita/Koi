@@ -27,6 +27,7 @@ impl Unifier {
             (Type::Float64, Type::Float64) => Ok(()),
             (Type::Bool, Type::Bool) => Ok(()),
             (Type::String, Type::String) => Ok(()),
+            (Type::Unit, Type::Unit) => Ok(()),
             (Type::Struct(a), Type::Struct(b)) if a == b => Ok(()),
 
             (Type::Variable(v), t) | (t, Type::Variable(v)) => {

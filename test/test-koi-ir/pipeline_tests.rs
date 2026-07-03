@@ -251,6 +251,97 @@ fn control_flow_like_program_produces_a_real_iterating_loop() {
 }
 
 #[test]
+fn array_literal_with_more_than_eight_elements_allocates_and_writes_every_element() {
+    // Regression test for the heap-corruption bug: array literals used to
+    // always allocate a hardcoded 64-byte buffer (`size: None` -> 8
+    // elements' worth of space) no matter how many elements the literal
+    // actually had. A 20-element literal exercises that boundary directly.
+    // This IR-level test can't observe the actual out-of-bounds write (that
+    // only happens in codegen/at runtime), but it does confirm the fix's
+    // IR-level effect: `Alloc` now requests `elements.len() * 8` bytes, and
+    // every element still gets its own correctly-indexed `SetIndex`.
+    let n = 20;
+    let elements: Vec<_> = (1..=n).map(int).collect();
+    let prog = program(vec![defn("f", vec![], array_literal(elements))]);
+
+    let ir = pipeline::compile(&prog).expect("expected the pipeline to succeed");
+    assert_no_unresolved_type_variables(&serde_json::to_value(&ir).unwrap());
+
+    let f = ir.functions.iter().find(|f| f.name == "f").unwrap();
+    let instrs: Vec<&Instruction> = f.blocks.iter().flat_map(|b| &b.instructions).collect();
+
+    // The Alloc must carry an explicit size (not the old `None` fallback),
+    // and that size must resolve to exactly n * 8 bytes.
+    let alloc_size_temp = instrs
+        .iter()
+        .find_map(|i| match i {
+            Instruction::Alloc { size, .. } => Some(size.clone()),
+            _ => None,
+        })
+        .expect("expected an Alloc instruction")
+        .expect("expected Alloc.size to be Some(_), not None");
+    let alloc_size_value = instrs
+        .iter()
+        .find_map(|i| match i {
+            Instruction::Const { result, value, .. } if *result == alloc_size_temp => {
+                Some(value.clone())
+            }
+            _ => None,
+        })
+        .expect("expected a Const producing the alloc size");
+    assert_eq!(
+        alloc_size_value,
+        serde_json::json!((n * 8) as i64),
+        "a {n}-element array should allocate {} bytes, not the old hardcoded 64",
+        n * 8
+    );
+
+    // Every element must have been written via its own SetIndex, at the
+    // right index, with the right value -- confirming the fix doesn't just
+    // allocate enough space but the existing per-element write loop still
+    // pairs indices/values correctly at this element count.
+    let set_indices: Vec<(&String, &String)> = instrs
+        .iter()
+        .filter_map(|i| match i {
+            Instruction::SetIndex { index, value, .. } => Some((index, value)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        set_indices.len(),
+        n as usize,
+        "expected exactly {n} set_index instructions, one per element"
+    );
+
+    let const_value_of = |temp: &String| -> Value {
+        instrs
+            .iter()
+            .find_map(|i| match i {
+                Instruction::Const { result, value, .. } if result == temp => Some(value.clone()),
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("no const instruction produced temp {temp}"))
+    };
+
+    let mut pairs: Vec<(i64, i64)> = set_indices
+        .into_iter()
+        .map(|(index_temp, value_temp)| {
+            let idx = const_value_of(index_temp).as_i64().unwrap();
+            let val = const_value_of(value_temp).as_i64().unwrap();
+            (idx, val)
+        })
+        .collect();
+    pairs.sort_by_key(|(idx, _)| *idx);
+
+    let expected: Vec<(i64, i64)> = (0..n).map(|i| (i, i + 1)).collect();
+    assert_eq!(
+        pairs, expected,
+        "every element (including the 9th through 20th, past the old 8-element limit) \
+         must be written at its correct index with its correct value"
+    );
+}
+
+#[test]
 fn type_error_is_reported_with_the_unification_phase_prefix() {
     let prog = program(vec![defn(
         "f",

@@ -249,6 +249,27 @@ fn field_access_field_name_is_raw_not_a_variable_node() {
 }
 
 #[test]
+fn set_field_form_fields() {
+    let program = parse("(defn f [p v] (set-field! p x v))");
+    match only_child(&program) {
+        ASTNode::FunctionDef { body, .. } => match body.as_ref() {
+            ASTNode::SetField {
+                object,
+                field,
+                value,
+                ..
+            } => {
+                assert_eq!(field, "x");
+                assert!(matches!(object.as_ref(), ASTNode::Variable { name, .. } if name == "p"));
+                assert!(matches!(value.as_ref(), ASTNode::Variable { name, .. } if name == "v"));
+            }
+            other => panic!("expected SetField, got {other:?}"),
+        },
+        other => panic!("expected FunctionDef, got {other:?}"),
+    }
+}
+
+#[test]
 fn index_form() {
     let program = parse("(defn f [arr i] (index arr i))");
     match only_child(&program) {
@@ -384,6 +405,67 @@ fn top_level_bare_call_without_defn_wrapper() {
         }
         other => panic!("expected Call, got {other:?}"),
     }
+}
+
+#[test]
+fn set_form_fields() {
+    let program = parse("(defn f [x] (set! x 5))");
+    match only_child(&program) {
+        ASTNode::FunctionDef { body, .. } => match body.as_ref() {
+            ASTNode::SetVar { name, value, .. } => {
+                assert_eq!(name, "x");
+                assert!(matches!(
+                    value.as_ref(),
+                    ASTNode::Literal { literal_type, .. } if literal_type == "int64"
+                ));
+            }
+            other => panic!("expected SetVar, got {other:?}"),
+        },
+        other => panic!("expected FunctionDef, got {other:?}"),
+    }
+}
+
+#[test]
+fn while_form_fields() {
+    let program = parse("(defn f [x] (while (< x 10) (set! x (+ x 1))))");
+    match only_child(&program) {
+        ASTNode::FunctionDef { body, .. } => match body.as_ref() {
+            ASTNode::WhileExpr {
+                condition, body, ..
+            } => {
+                assert!(matches!(condition.as_ref(), ASTNode::Call { .. }));
+                assert!(matches!(body.as_ref(), ASTNode::SetVar { .. }));
+            }
+            other => panic!("expected WhileExpr, got {other:?}"),
+        },
+        other => panic!("expected FunctionDef, got {other:?}"),
+    }
+}
+
+#[test]
+fn do_form_collects_all_expressions() {
+    let program = parse("(defn f [x] (do (set! x 1) (set! x 2) x))");
+    match only_child(&program) {
+        ASTNode::FunctionDef { body, .. } => match body.as_ref() {
+            ASTNode::DoExpr { exprs, .. } => {
+                assert_eq!(exprs.len(), 3);
+                assert!(matches!(exprs[0], ASTNode::SetVar { .. }));
+                assert!(matches!(exprs[1], ASTNode::SetVar { .. }));
+                assert!(matches!(exprs[2], ASTNode::Variable { .. }));
+            }
+            other => panic!("expected DoExpr, got {other:?}"),
+        },
+        other => panic!("expected FunctionDef, got {other:?}"),
+    }
+}
+
+#[test]
+fn do_with_zero_expressions_is_a_parse_error() {
+    let result = Parser::new(Scanner::new("(defn f [] (do))")).parse_program();
+    assert!(
+        result.is_err(),
+        "expected `(do)` to be a parse error, got {result:?}"
+    );
 }
 
 #[test]

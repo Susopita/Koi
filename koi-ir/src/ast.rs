@@ -95,6 +95,15 @@ pub enum ASTNode {
         column: usize,
     },
 
+    #[serde(rename = "set_field")]
+    SetField {
+        object: Box<ASTNode>,
+        field: String,
+        value: Box<ASTNode>,
+        line: usize,
+        column: usize,
+    },
+
     #[serde(rename = "index")]
     Index {
         array: Box<ASTNode>,
@@ -130,6 +139,50 @@ pub enum ASTNode {
     #[serde(rename = "array_literal")]
     ArrayLiteral {
         elements: Vec<ASTNode>,
+        line: usize,
+        column: usize,
+    },
+
+    #[serde(rename = "set")]
+    SetVar {
+        name: String,
+        value: Box<ASTNode>,
+        line: usize,
+        column: usize,
+    },
+
+    #[serde(rename = "while")]
+    WhileExpr {
+        condition: Box<ASTNode>,
+        body: Box<ASTNode>,
+        line: usize,
+        column: usize,
+    },
+
+    #[serde(rename = "do")]
+    DoExpr {
+        exprs: Vec<ASTNode>,
+        line: usize,
+        column: usize,
+    },
+
+    /// Compiler-internal only: koi-ast has no concept of closures, so this
+    /// variant never round-trips through real `/tmp/ast.json` from koi-ast.
+    /// It's produced by `lambda_lifter.rs` in place of a capturing `Lambda`
+    /// (replacing the old placeholder `Call` to a made-up
+    /// `__make_closure_*` function name) and consumed only by
+    /// `ir_generator.rs`, which runs strictly after monomorphization and
+    /// lambda-lifting -- by that point every captured variable's type is
+    /// already concrete, so the actual closure construction (env struct
+    /// alloc + field stores + the shared `Closure` wrapper) can happen
+    /// there with real types in hand instead of the lifter's placeholder
+    /// i64-for-everything guess. Still tagged/derived like every other
+    /// variant for consistency, even though the tag is never exercised by
+    /// external JSON.
+    #[serde(rename = "make_closure")]
+    MakeClosure {
+        function_name: String,
+        captured: Vec<String>,
         line: usize,
         column: usize,
     },

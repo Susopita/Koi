@@ -1,0 +1,42 @@
+; Pipeline map -> filter -> reduce real, con dos clausuras INDEPENDIENTES
+; que capturan variables libres (factor, threshold), midiendo el costo real
+; de closure-conversion (fat pointers + struct de entorno) -- exactamente lo
+; que este benchmark media antes de que las clausuras con captura se
+; rompieran por completo (ver CRITICAL_FIXES_REPORT.md).
+;
+; LIMITACION CONOCIDA (encontrada al reconstruir este benchmark): una
+; clausura capturadora solo funciona si se crea y se invoca dentro de la
+; MISMA funcion -- pasarla como parametro a una funcion generica tipo
+; `(defn map [f arr n] ... (f ...) ...)` y llamarla ahi produce un segfault,
+; porque la marca de tipo "closure_..." que identifica un valor-closure solo
+; existe en el sitio de construccion, no se propaga a traves de la firma de
+; una funcion. Por eso el pipeline abajo esta inlineado en `main` en vez de
+; factorizado en funciones `map`/`filter`/`reduce` reutilizables (ver
+; LANGUAGE_EXTENSION_ROADMAP.md para el detalle tecnico).
+;
+; Simplificacion respecto al filtro original documentado (par Y > threshold):
+; se usa solo `> threshold`, ya que koi no tiene un builtin `mod` -- no
+; cambia lo que se mide (overhead de invocar una clausura por elemento).
+(defn main []
+  (let [n 1000000
+        data (new arr_i64 (* n 8))]
+    (let [i 0]
+      (do
+        (while (< i n)
+          (do
+            (aset! data i i)
+            (set! i (+ i 1))))
+        (let [factor 3]
+          (let [double-fn (lambda [x] (* x factor))]
+            (let [threshold 500000]
+              (let [keep-fn (lambda [x] (if (> x threshold) 1 0))]
+                (let [j 0]
+                  (let [sum 0]
+                    (do
+                      (while (< j n)
+                        (do
+                          (let [doubled (double-fn (index data j))]
+                            (if (== (keep-fn doubled) 1)
+                                (set! sum (+ sum doubled))))
+                          (set! j (+ j 1))))
+                      (print sum))))))))))))

@@ -1,0 +1,54 @@
+; Quicksort real, in-place, sobre un arreglo de tamano dinamico real
+; (n=100000, igual que benchmarks/rust/quicksort.rs). Antes de que existiera
+; asignacion dinamica real de arreglos (ver CRITICAL_FIXES_REPORT.md), esto
+; estaba limitado a 8 elementos por el tope fijo de 64 bytes de los arreglos
+; literales -- ya no aplica: `(new arr_i64 bytes)` asigna exactamente lo que
+; se le pide.
+(defn swap [arr i j]
+  (let [tmp (index arr i)]
+    (do
+      (aset! arr i (index arr j))
+      (aset! arr j tmp))))
+
+(defn partition [arr low high]
+  (let [pivot (index arr high)]
+    (let [i (- low 1)]
+      (let [j low]
+        (do
+          (while (< j high)
+            (do
+              (if (<= (index arr j) pivot)
+                  (do
+                    (set! i (+ i 1))
+                    (swap arr i j)))
+              (set! j (+ j 1))))
+          (swap arr (+ i 1) high)
+          (+ i 1))))))
+
+(defn quicksort-range [arr low high]
+  (if (< low high)
+      (let [p (partition arr low high)]
+        (do
+          (quicksort-range arr low (- p 1))
+          (quicksort-range arr (+ p 1) high)))))
+
+; Generador congruencial lineal, mismos parametros que quicksort.rs, para
+; datos deterministas sin depender de un builtin de numeros aleatorios.
+(defn lcg-next [state]
+  (+ (* state 6364136223846793005) 1442695040888963407))
+
+(defn main []
+  (let [n 100000
+        arr (new arr_i64 (* n 8))]
+    (let [i 0]
+      (let [state 88172645463325252]
+        (do
+          (while (< i n)
+            (do
+              (set! state (lcg-next state))
+              (aset! arr i state)
+              (set! i (+ i 1))))
+          (quicksort-range arr 0 (- n 1))
+          ; Tocar el resultado para que no se elimine el trabajo.
+          (print (index arr 0))
+          (print (index arr (- n 1))))))))

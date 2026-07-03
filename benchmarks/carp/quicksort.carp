@@ -1,0 +1,44 @@
+; NOTA: sintaxis a validar con `carp --check quicksort.carp`.
+; Carp maneja arrays con ownership estricto; swap/aset! son mutaciones
+; en el lugar sobre una referencia (&) al arreglo.
+
+(defn swap! [arr i j]
+  (let [tmp @(Array.unsafe-nth arr i)]
+    (do
+      (Array.aset! arr i @(Array.unsafe-nth arr j))
+      (Array.aset! arr j tmp))))
+
+(defn partition [arr low high]
+  (let [pivot @(Array.unsafe-nth arr high)
+        i (Int.dec low)]
+    (do
+      (for [j low high]
+        (when (<= @(Array.unsafe-nth arr j) pivot)
+          (do
+            (set! i (Int.inc i))
+            (swap! arr i j))))
+      (swap! arr (Int.inc i) high)
+      (Int.inc i))))
+
+(defn quicksort-range [arr low high]
+  (when (< low high)
+    (let [p (partition arr low high)]
+      (do
+        (quicksort-range arr low (Int.dec p))
+        (quicksort-range arr (Int.inc p) high)))))
+
+(defn lcg-next [state]
+  (Long.+ (Long.* @state 6364136223846793005l) 1442695040888963407l))
+
+(defn main []
+  (let [n 100000
+        state (Long.ref 88172645463325252l)
+        data (Array.replicate n &0)]
+    (do
+      (for [i 0 n]
+        (do
+          (set! state (lcg-next &state))
+          (Array.aset! &data i (Long.to-int (mod @state 1000000l)))))
+      (quicksort-range &data 0 (Int.dec n))
+      (println* (Array.unsafe-nth &data 0))
+      (println* (Array.unsafe-nth &data (Int.dec n))))))

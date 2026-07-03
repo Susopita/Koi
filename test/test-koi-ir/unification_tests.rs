@@ -39,6 +39,17 @@ fn unify_same_concrete_types_succeeds() {
 }
 
 #[test]
+fn unify_unit_with_itself_succeeds() {
+    assert!(Unifier::unify(&[constraint(Type::Unit, Type::Unit)]).is_ok());
+}
+
+#[test]
+fn unify_unit_with_a_concrete_type_fails() {
+    let err = Unifier::unify(&[constraint(Type::Unit, Type::Int64)]).unwrap_err();
+    assert!(err.contains("Type mismatch"), "unexpected error: {err}");
+}
+
+#[test]
 fn unify_mismatched_concrete_types_fails() {
     let err = Unifier::unify(&[constraint(Type::Int64, Type::Bool)]).unwrap_err();
     assert!(err.contains("Type mismatch"), "unexpected error: {err}");
@@ -165,4 +176,10 @@ fn resolve_leaves_already_concrete_types_untouched() {
         Type::Struct("Point".to_string())
     );
     assert_eq!(Unifier::resolve(&subst, &Type::Bool), Type::Bool);
+}
+
+#[test]
+fn resolve_leaves_unit_untouched() {
+    let subst = Substitution::new();
+    assert_eq!(Unifier::resolve(&subst, &Type::Unit), Type::Unit);
 }

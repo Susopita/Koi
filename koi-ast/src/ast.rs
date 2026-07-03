@@ -91,6 +91,15 @@ pub enum ASTNode {
         column: usize,
     },
 
+    #[serde(rename = "set_field")]
+    SetField {
+        object: Box<ASTNode>,
+        field: String,
+        value: Box<ASTNode>,
+        line: usize,
+        column: usize,
+    },
+
     #[serde(rename = "index")]
     Index {
         array: Box<ASTNode>,
@@ -126,6 +135,29 @@ pub enum ASTNode {
     #[serde(rename = "array_literal")]
     ArrayLiteral {
         elements: Vec<ASTNode>,
+        line: usize,
+        column: usize,
+    },
+
+    #[serde(rename = "set")]
+    SetVar {
+        name: String,
+        value: Box<ASTNode>,
+        line: usize,
+        column: usize,
+    },
+
+    #[serde(rename = "while")]
+    WhileExpr {
+        condition: Box<ASTNode>,
+        body: Box<ASTNode>,
+        line: usize,
+        column: usize,
+    },
+
+    #[serde(rename = "do")]
+    DoExpr {
+        exprs: Vec<ASTNode>,
         line: usize,
         column: usize,
     },

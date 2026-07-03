@@ -106,6 +106,29 @@ pub enum Instruction {
         #[serde(rename = "type")]
         ty: String,
     },
+    /// Write counterpart to `get_index` (backs `aset!`) -- a store has no
+    /// result value, so this drops `result` and adds `value` instead.
+    #[serde(rename = "set_index")]
+    SetIndex {
+        array: String,
+        index: String,
+        value: String,
+        #[serde(rename = "type")]
+        ty: String,
+    },
+    /// Write counterpart to `get_field` -- a store has no result value, so
+    /// this drops `result` and adds `value` instead (mirrors `set_index`
+    /// relative to `get_index`). Used to populate a closure's env struct
+    /// (one per captured variable) and the shared `Closure` wrapper's
+    /// `fn_ptr`/`env_ptr` fields when generating a `MakeClosure` node.
+    #[serde(rename = "set_field")]
+    SetField {
+        object: String,
+        field: String,
+        value: String,
+        #[serde(rename = "type")]
+        ty: String,
+    },
     #[serde(rename = "addr_of")]
     AddrOf {
         result: String,

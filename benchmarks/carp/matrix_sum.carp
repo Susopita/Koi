@@ -1,0 +1,18 @@
+; NOTA: sintaxis a validar con `carp --check matrix_sum.carp`.
+; Si Array2 / matrices anidadas dan problemas de ownership, considerar
+; representar la matriz como un Array plano de tamaño N*N (fila-mayor)
+; en su lugar -- suele ser más simple en Carp.
+
+(def N 500)
+
+(defn main []
+  (let [matrix (Array.replicate (* N N) &0l)
+        sum (Long.ref 0l)]
+    (do
+      (for [i 0 N]
+        (for [j 0 N]
+          (Array.aset! &matrix (+ (* i N) j) (Long.from-int (+ (* i N) j)))))
+      (for [i 0 N]
+        (for [j 0 N]
+          (set! sum (Long.+ @sum @(Array.unsafe-nth &matrix (+ (* i N) j))))))
+      (println* &sum))))

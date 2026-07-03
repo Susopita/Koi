@@ -126,6 +126,17 @@ fn struct_field_names_are_not_scope_checked() {
 }
 
 #[test]
+fn set_field_field_name_is_not_scope_checked() {
+    assert_ok("(defstruct Point [x i64] [y i64]) (defn f [p v] (set-field! p x v))");
+}
+
+#[test]
+fn set_field_object_and_value_are_checked() {
+    assert_undeclared("(defstruct Point [x i64] [y i64]) (defn f [] (set-field! p x 1))", "p");
+    assert_undeclared("(defstruct Point [x i64] [y i64]) (defn f [p] (set-field! p x v))", "v");
+}
+
+#[test]
 fn new_type_name_is_not_scope_checked() {
     assert_ok("(defstruct Point [x i64] [y i64]) (defn f [] (new Point))");
 }
@@ -167,4 +178,47 @@ fn if_branches_are_checked() {
     assert_ok("(defn f [x] (if x x x))");
     assert_undeclared("(defn f [x] (if x y x))", "y");
     assert_undeclared("(defn f [x] (if x x y))", "y");
+}
+
+#[test]
+fn set_of_undeclared_variable_is_reported() {
+    assert_undeclared("(defn f [] (set! x 1))", "x");
+}
+
+#[test]
+fn set_of_declared_parameter_is_allowed() {
+    assert_ok("(defn f [x] (set! x 1))");
+}
+
+#[test]
+fn set_of_let_binding_is_allowed() {
+    assert_ok("(defn f [] (let [a 1] (set! a 2)))");
+}
+
+#[test]
+fn set_of_loop_variable_is_allowed() {
+    assert_ok("(defn f [n] (loop [i 0] (< i n) (+ i 1) (set! i (+ i 1))))");
+}
+
+#[test]
+fn set_value_expression_is_checked() {
+    assert_undeclared("(defn f [x] (set! x y))", "y");
+}
+
+#[test]
+fn while_condition_and_body_are_checked() {
+    assert_ok("(defn f [x] (while (< x 10) (set! x (+ x 1))))");
+    assert_undeclared("(defn f [x] (while y (set! x (+ x 1))))", "y");
+    assert_undeclared("(defn f [x] (while (< x 10) (set! y 1)))", "y");
+}
+
+#[test]
+fn while_body_can_reference_outer_variable() {
+    assert_ok("(defn f [x y] (while (< x y) (set! x (+ x 1))))");
+}
+
+#[test]
+fn do_sequences_multiple_checked_expressions() {
+    assert_ok("(defn f [x] (do (set! x 1) (set! x 2) x))");
+    assert_undeclared("(defn f [x] (do (set! x 1) y))", "y");
 }

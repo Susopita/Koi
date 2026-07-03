@@ -36,6 +36,13 @@ fn builtin_bare_type(kind: &BuiltinKind) -> Type {
             params: vec![Type::Pointer(Box::new(fresh()))],
             return_type: Box::new(Type::Int64),
         },
+        BuiltinKind::SetIndex => {
+            let elem = fresh();
+            Type::Function {
+                params: vec![Type::Array(Box::new(elem.clone())), Type::Int64, elem],
+                return_type: Box::new(Type::Unit),
+            }
+        }
     }
 }
 
@@ -84,6 +91,9 @@ impl ConstraintGenerator {
             "f64" | "float64" => Type::Float64,
             "bool" => Type::Bool,
             "string" => Type::String,
+            other if other.starts_with("arr_") => {
+                Type::Array(Box::new(self.parse_type_str(&other["arr_".len()..])))
+            }
             other => Type::Struct(other.to_string()),
         }
     }
@@ -204,6 +214,19 @@ impl ConstraintGenerator {
             ASTNode::Program { .. } | ASTNode::FunctionDef { .. } | ASTNode::StructDef { .. } => {
                 Err(format!("'{:?}' cannot appear inside an expression", node))
             }
+
+            // Mechanical-only arm, not a functional inference change:
+            // `MakeClosure` is produced by `lambda_lifter.rs`, which runs
+            // strictly *after* inference in the pipeline (see
+            // `pipeline.rs`'s pass order) -- this stage never actually
+            // receives one at runtime. This arm exists purely to satisfy
+            // the compiler's exhaustiveness check now that `ASTNode` has
+            // the new variant; it errors defensively, same as the
+            // `Program`/`FunctionDef`/`StructDef` arm above, rather than
+            // inventing a fake type for a node this stage should never see.
+            ASTNode::MakeClosure { .. } => Err(format!(
+                "'{node:?}' cannot appear before lambda-lifting"
+            )),
 
             ASTNode::Literal { literal_type, .. } => Ok(match literal_type.as_str() {
                 "int64" => Type::Int64,
@@ -377,6 +400,47 @@ impl ConstraintGenerator {
                 }
             }
 
+            ASTNode::SetField {
+                object,
+                field,
+                value,
+                line,
+                column,
+            } => {
+                let object_type = self.generate_expr(object)?;
+                let value_type = self.generate_expr(value)?;
+
+                let matches: Vec<(&String, &Type)> = self
+                    .struct_fields
+                    .iter()
+                    .filter_map(|(struct_name, fields)| {
+                        fields
+                            .iter()
+                            .find(|(fname, _)| fname == field)
+                            .map(|(_, fty)| (struct_name, fty))
+                    })
+                    .collect();
+
+                if let [(struct_name, field_type)] = matches[..] {
+                    let field_type = field_type.clone();
+                    self.constrain(
+                        object_type,
+                        Type::Struct(struct_name.clone()),
+                        &format!("set-field! '.{field}'"),
+                        *line,
+                        *column,
+                    );
+                    self.constrain(
+                        value_type,
+                        field_type,
+                        &format!("set-field! '.{field}' value type"),
+                        *line,
+                        *column,
+                    );
+                }
+                Ok(Type::Unit)
+            }
+
             ASTNode::Index {
                 array,
                 index,
@@ -435,7 +499,7 @@ impl ConstraintGenerator {
 
                 let base_type = self.parse_type_str(type_str);
                 Ok(match base_type {
-                    Type::Struct(_) => base_type,
+                    Type::Struct(_) | Type::Array(_) => base_type,
                     other => Type::Pointer(Box::new(other)),
                 })
             }
@@ -463,6 +527,70 @@ impl ConstraintGenerator {
 
                 Ok(Type::Array(Box::new(elem_type)))
             }
+
+            ASTNode::SetVar {
+                name,
+                value,
+                line,
+                column,
+            } => {
+                let value_type = self.generate_expr(value)?;
+                match self.lookup(name) {
+                    Some(existing_type) => {
+                        // Mutation must not change the binding's inferred
+                        // type -- no annotation here, so the new value's
+                        // type has to match whatever `name` was already
+                        // declared as (same lookup mechanism `Variable` uses).
+                        self.constrain(
+                            existing_type,
+                            value_type,
+                            &format!("set! target '{name}' must keep its type"),
+                            *line,
+                            *column,
+                        );
+                        Ok(Type::Unit)
+                    }
+                    // koi-ast's scope analysis should already reject
+                    // assignment to an undeclared name before this stage
+                    // runs; handle it defensively rather than panicking.
+                    None => Err(format!(
+                        "set! target '{name}' is not declared at line {line}, column {column}"
+                    )),
+                }
+            }
+
+            ASTNode::WhileExpr {
+                condition,
+                body,
+                line,
+                column,
+            } => {
+                let cond_type = self.generate_expr(condition)?;
+                self.constrain(cond_type, Type::Bool, "while condition", *line, *column);
+
+                // Only the body's side effects/constraints matter -- its
+                // value is discarded.
+                self.generate_expr(body)?;
+
+                Ok(Type::Unit)
+            }
+
+            ASTNode::DoExpr {
+                exprs,
+                line,
+                column,
+            } => {
+                let Some((last, init)) = exprs.split_last() else {
+                    return Err(format!(
+                        "'do' requires at least one expression at line {line}, column {column}"
+                    ));
+                };
+
+                for expr in init {
+                    self.generate_expr(expr)?;
+                }
+                self.generate_expr(last)
+            }
         }
     }
 
@@ -473,6 +601,13 @@ impl ConstraintGenerator {
         line: usize,
         column: usize,
     ) -> Result<Type, String> {
+        if matches!(kind, BuiltinKind::SetIndex) && arguments.len() != 3 {
+            return Err(format!(
+                "aset! expects exactly 3 arguments (array, index, value), got {} at line {line}, column {column}",
+                arguments.len()
+            ));
+        }
+
         let mut arg_types = vec![];
         for arg in arguments {
             arg_types.push(self.generate_expr(arg)?);
@@ -533,6 +668,26 @@ impl ConstraintGenerator {
                     );
                 }
                 Ok(Type::Int64)
+            }
+            BuiltinKind::SetIndex => {
+                let elem_ty = Type::Variable(TypeVar::fresh());
+
+                let array_ty = arg_types[0].clone();
+                self.constrain(
+                    array_ty,
+                    Type::Array(Box::new(elem_ty.clone())),
+                    "aset! target must be an array",
+                    line,
+                    column,
+                );
+
+                let index_ty = arg_types[1].clone();
+                self.constrain(index_ty, Type::Int64, "aset! index", line, column);
+
+                let value_ty = arg_types[2].clone();
+                self.constrain(value_ty, elem_ty, "aset! value must match element type", line, column);
+
+                Ok(Type::Unit)
             }
         }
     }

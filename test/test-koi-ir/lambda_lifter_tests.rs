@@ -267,3 +267,128 @@ fn a_lambda_parameter_shadows_an_outer_capture_of_the_same_name() {
         "shadowed parameter name must not be captured, got: {defs:?}"
     );
 }
+
+#[test]
+fn a_function_using_while_do_and_set_lifts_without_crashing() {
+    // Free-variable analysis and node reconstruction must handle the new
+    // SetVar/WhileExpr/DoExpr node types without panicking, even though
+    // deep closure-capture-of-a-mutated-variable behavior is out of scope.
+    let prog = program(vec![defn(
+        "count-to",
+        vec![("n", None)],
+        let_binding(
+            vec![("i", int(0))],
+            do_expr(vec![
+                while_expr(
+                    call_named("<", vec![var("i"), var("n")]),
+                    set_var("i", call_named("+", vec![var("i"), int(1)])),
+                ),
+                var("i"),
+            ]),
+        ),
+    )]);
+
+    let mut lifter = LambdaLifter::for_program(&prog);
+    let lifted = lifter.lift_program(&prog);
+
+    let defs = function_defs(&lifted);
+    let count_to = defs
+        .iter()
+        .find(|(name, ..)| *name == "count-to")
+        .expect("expected count-to to survive lifting");
+    // Sanity check the shape survived: still a let-binding wrapping a do
+    // wrapping a while and a trailing variable reference.
+    let ASTNode::LetBinding { body, .. } = count_to.2 else {
+        panic!("expected a let-binding body, got: {:?}", count_to.2)
+    };
+    assert!(matches!(body.as_ref(), ASTNode::DoExpr { .. }));
+}
+
+#[test]
+fn a_lambda_capturing_a_variable_used_in_while_and_set_is_still_captured() {
+    // The lambda's body uses `x` (from the enclosing function) inside a
+    // `while`/`set!`; free-variable analysis must still see `x` as a
+    // capture even though it's inside these new node types.
+    let prog = program(vec![defn(
+        "outer",
+        vec![("x", None)],
+        lambda(
+            vec![("y", None)],
+            do_expr(vec![
+                while_expr(
+                    call_named("<", vec![var("y"), var("x")]),
+                    set_var("y", call_named("+", vec![var("y"), int(1)])),
+                ),
+                var("y"),
+            ]),
+        ),
+    )]);
+
+    let mut lifter = LambdaLifter::for_program(&prog);
+    let lifted = lifter.lift_program(&prog);
+
+    let structs = struct_defs(&lifted);
+    let env_struct = structs
+        .first()
+        .expect("expected an env struct capturing 'x'");
+    assert_eq!(
+        env_struct
+            .1
+            .iter()
+            .map(|(n, _)| n.as_str())
+            .collect::<Vec<_>>(),
+        vec!["x"]
+    );
+}
+
+#[test]
+fn a_captured_free_variable_lifts_to_a_make_closure_node_not_a_placeholder_call() {
+    // Regression: capturing lambdas used to lower to a placeholder `Call`
+    // targeting a made-up `__make_closure_{func_name}` function name that
+    // nothing anywhere ever defined -- which is exactly why koi-assembly
+    // failed with "no home allocated for value '__make_closure__lambda_0'"
+    // whenever a lambda captured a free variable. They must lower to a
+    // dedicated `MakeClosure` node instead, carrying the lifted function's
+    // name and the exact set of captured variable names; `ir_generator.rs`
+    // is what actually constructs the closure value from this node, using
+    // real (post-monomorphization) types unavailable at this stage.
+    let prog = program(vec![defn(
+        "outer",
+        vec![("x", None)],
+        lambda(vec![("y", None)], call_named("+", vec![var("y"), var("x")])),
+    )]);
+
+    let mut lifter = LambdaLifter::for_program(&prog);
+    let lifted = lifter.lift_program(&prog);
+
+    let outer = function_defs(&lifted)
+        .into_iter()
+        .find(|(name, ..)| *name == "outer")
+        .expect("expected 'outer' to survive lifting");
+
+    let ASTNode::MakeClosure {
+        function_name,
+        captured,
+        ..
+    } = outer.2
+    else {
+        panic!(
+            "expected 'outer' body to become a MakeClosure node, got: {:?}",
+            outer.2
+        )
+    };
+
+    assert!(
+        function_name.starts_with("_lambda_"),
+        "expected the MakeClosure to name a lifted lambda function, got: {function_name}"
+    );
+    assert_eq!(captured, &vec!["x".to_string()]);
+
+    // No placeholder `__make_closure_*` call survives anywhere in the
+    // lifted program.
+    let lifted_json = serde_json::to_string(&lifted).unwrap();
+    assert!(
+        !lifted_json.contains("__make_closure_"),
+        "no placeholder __make_closure_* call should remain, got: {lifted_json}"
+    );
+}

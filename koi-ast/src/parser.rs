@@ -110,12 +110,24 @@ impl Parser {
         } else if self.is_keyword("field") {
             self.advance();
             self.parse_field_access(line, column)
+        } else if self.is_keyword("set-field!") {
+            self.advance();
+            self.parse_set_field(line, column)
         } else if self.is_keyword("index") {
             self.advance();
             self.parse_index(line, column)
         } else if self.is_keyword("new") {
             self.advance();
             self.parse_new(line, column)
+        } else if self.is_keyword("set!") {
+            self.advance();
+            self.parse_set(line, column)
+        } else if self.is_keyword("while") {
+            self.advance();
+            self.parse_while(line, column)
+        } else if self.is_keyword("do") {
+            self.advance();
+            self.parse_do(line, column)
         } else {
             self.parse_call(line, column)
         }
@@ -281,6 +293,21 @@ impl Parser {
         })
     }
 
+    fn parse_set_field(&mut self, line: usize, column: usize) -> Result<ASTNode, String> {
+        let object = Box::new(self.parse_expr()?);
+        let field = self.expect_symbol()?;
+        let value = Box::new(self.parse_expr()?);
+        self.expect(&Token::RParen, "Expected ) to close set-field! expression")?;
+
+        Ok(ASTNode::SetField {
+            object,
+            field,
+            value,
+            line,
+            column,
+        })
+    }
+
     fn parse_index(&mut self, line: usize, column: usize) -> Result<ASTNode, String> {
         let array = Box::new(self.parse_expr()?);
         let index = Box::new(self.parse_expr()?);
@@ -308,6 +335,57 @@ impl Parser {
         Ok(ASTNode::New {
             type_str,
             size_or_init,
+            line,
+            column,
+        })
+    }
+
+    fn parse_set(&mut self, line: usize, column: usize) -> Result<ASTNode, String> {
+        let name = self
+            .expect_symbol()
+            .map_err(|e| format!("Expected variable name to set!: {}", e))?;
+        let value = Box::new(self.parse_expr()?);
+        self.expect(&Token::RParen, "Expected ) to close set! expression")?;
+
+        Ok(ASTNode::SetVar {
+            name,
+            value,
+            line,
+            column,
+        })
+    }
+
+    fn parse_while(&mut self, line: usize, column: usize) -> Result<ASTNode, String> {
+        let condition = Box::new(self.parse_expr()?);
+        let body = Box::new(self.parse_expr()?);
+        self.expect(&Token::RParen, "Expected ) to close while expression")?;
+
+        Ok(ASTNode::WhileExpr {
+            condition,
+            body,
+            line,
+            column,
+        })
+    }
+
+    fn parse_do(&mut self, line: usize, column: usize) -> Result<ASTNode, String> {
+        let mut exprs = vec![];
+
+        while !self.check(&Token::RParen) && !matches!(self.current.token, Token::Eof) {
+            exprs.push(self.parse_expr()?);
+        }
+
+        if exprs.is_empty() {
+            return Err(format!(
+                "do requires at least one expression. Got {:?} at line {}, column {}",
+                self.current.token, self.current.line, self.current.column
+            ));
+        }
+
+        self.expect(&Token::RParen, "Expected ) to close do expression")?;
+
+        Ok(ASTNode::DoExpr {
+            exprs,
             line,
             column,
         })

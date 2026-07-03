@@ -156,6 +156,16 @@ pub fn field_access(object: ASTNode, field: &str) -> ASTNode {
     }
 }
 
+pub fn set_field(object: ASTNode, field: &str, value: ASTNode) -> ASTNode {
+    ASTNode::SetField {
+        object: Box::new(object),
+        field: field.to_string(),
+        value: Box::new(value),
+        line: 1,
+        column: 1,
+    }
+}
+
 pub fn index(array: ASTNode, idx: ASTNode) -> ASTNode {
     ASTNode::Index {
         array: Box::new(array),
@@ -193,6 +203,45 @@ pub fn new_expr(type_str: &str, size_or_init: Option<ASTNode>) -> ASTNode {
 pub fn array_literal(elements: Vec<ASTNode>) -> ASTNode {
     ASTNode::ArrayLiteral {
         elements,
+        line: 1,
+        column: 1,
+    }
+}
+
+pub fn set_var(name: &str, value: ASTNode) -> ASTNode {
+    ASTNode::SetVar {
+        name: name.to_string(),
+        value: Box::new(value),
+        line: 1,
+        column: 1,
+    }
+}
+
+pub fn while_expr(condition: ASTNode, body: ASTNode) -> ASTNode {
+    ASTNode::WhileExpr {
+        condition: Box::new(condition),
+        body: Box::new(body),
+        line: 1,
+        column: 1,
+    }
+}
+
+pub fn do_expr(exprs: Vec<ASTNode>) -> ASTNode {
+    ASTNode::DoExpr {
+        exprs,
+        line: 1,
+        column: 1,
+    }
+}
+
+/// Builds a `MakeClosure` node directly, exactly as `lambda_lifter.rs`
+/// would produce it for a capturing lambda -- used by tests that exercise
+/// `ir_generator.rs`'s closure-construction/closure-call handling without
+/// going through the lifter itself.
+pub fn make_closure(function_name: &str, captured: Vec<&str>) -> ASTNode {
+    ASTNode::MakeClosure {
+        function_name: function_name.to_string(),
+        captured: captured.into_iter().map(str::to_string).collect(),
         line: 1,
         column: 1,
     }

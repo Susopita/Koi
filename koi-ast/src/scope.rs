@@ -5,7 +5,7 @@ use std::collections::{HashMap, HashSet};
 /// their own, koi-ir/koi-assembly special-case them.
 const BUILTINS: &[&str] = &[
     "+", "-", "*", "/", "<", ">", "<=", ">=", "==", "!=", "&&", "||", "!", "print", "malloc",
-    "free",
+    "free", "aset!",
 ];
 
 pub struct ScopeAnalyzer {
@@ -168,6 +168,10 @@ impl ScopeAnalyzer {
             ASTNode::FieldAccess { object, .. } => {
                 self.analyze_node(object);
             }
+            ASTNode::SetField { object, value, .. } => {
+                self.analyze_node(object);
+                self.analyze_node(value);
+            }
             ASTNode::Index { array, index, .. } => {
                 self.analyze_node(array);
                 self.analyze_node(index);
@@ -183,6 +187,32 @@ impl ScopeAnalyzer {
             ASTNode::ArrayLiteral { elements, .. } => {
                 for element in elements {
                     self.analyze_node(element);
+                }
+            }
+            ASTNode::SetVar {
+                name,
+                value,
+                line,
+                column,
+            } => {
+                self.analyze_node(value);
+                if !self.is_declared(name) && !self.functions.contains(name) && !Self::is_builtin(name)
+                {
+                    self.errors.push(format!(
+                        "Variable '{}' not declared at line {}, column {}",
+                        name, line, column
+                    ));
+                }
+            }
+            ASTNode::WhileExpr {
+                condition, body, ..
+            } => {
+                self.analyze_node(condition);
+                self.analyze_node(body);
+            }
+            ASTNode::DoExpr { exprs, .. } => {
+                for e in exprs {
+                    self.analyze_node(e);
                 }
             }
         }

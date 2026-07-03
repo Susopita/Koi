@@ -16,6 +16,11 @@ pub enum Type {
         return_type: Box<Type>,
     },
     Variable(TypeVar),
+    /// The type of expressions run only for their side effects (`set!`,
+    /// `while`) -- carries no value and no substructure, so every generic
+    /// recursive helper below (`apply`, `occurs_check`, `resolve`) handles it
+    /// correctly via their existing catch-all arms.
+    Unit,
 }
 
 impl Type {
@@ -42,6 +47,7 @@ impl Type {
                 )
             }
             Type::Variable(v) => format!("T{}", v.id),
+            Type::Unit => "unit".to_string(),
         }
     }
 }

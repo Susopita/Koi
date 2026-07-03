@@ -91,11 +91,27 @@ pub enum Instruction {
         #[serde(rename = "type")]
         ty: String,
     },
+    #[serde(rename = "set_field")]
+    SetField {
+        object: String,
+        field: String,
+        value: String,
+        #[serde(rename = "type")]
+        ty: String,
+    },
     #[serde(rename = "get_index")]
     GetIndex {
         result: String,
         array: String,
         index: String,
+        #[serde(rename = "type")]
+        ty: String,
+    },
+    #[serde(rename = "set_index")]
+    SetIndex {
+        array: String,
+        index: String,
+        value: String,
         #[serde(rename = "type")]
         ty: String,
     },
@@ -129,7 +145,11 @@ impl Instruction {
             Instruction::Call { result, .. } | Instruction::CallIndirect { result, .. } => {
                 result.as_deref()
             }
-            Instruction::Return { .. } | Instruction::Jump { .. } | Instruction::Branch { .. } => None,
+            Instruction::Return { .. }
+            | Instruction::Jump { .. }
+            | Instruction::Branch { .. }
+            | Instruction::SetIndex { .. }
+            | Instruction::SetField { .. } => None,
         }
     }
 
@@ -144,7 +164,11 @@ impl Instruction {
             | Instruction::AddrOf { ty, .. }
             | Instruction::Deref { ty, .. } => Some(ty),
             Instruction::Call { ty, .. } | Instruction::CallIndirect { ty, .. } => ty.as_deref(),
-            Instruction::Return { .. } | Instruction::Jump { .. } | Instruction::Branch { .. } => None,
+            Instruction::Return { .. }
+            | Instruction::Jump { .. }
+            | Instruction::Branch { .. }
+            | Instruction::SetIndex { .. }
+            | Instruction::SetField { .. } => None,
         }
     }
 }

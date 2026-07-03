@@ -69,6 +69,14 @@ impl LambdaLifter {
                 node.clone()
             }
 
+            // `MakeClosure` is itself the OUTPUT of processing a `Lambda`
+            // node below (see `lift_lambda`), not something that appears as
+            // an input containing further sub-expressions of its own to
+            // recurse into -- it's already a fully "lifted" leaf by
+            // construction, so this is a pass-through purely for match
+            // exhaustiveness over the new `ASTNode` variant.
+            ASTNode::MakeClosure { .. } => node.clone(),
+
             ASTNode::Lambda {
                 parameters,
                 body,
@@ -142,6 +150,19 @@ impl LambdaLifter {
                 line: *line,
                 column: *column,
             },
+            ASTNode::SetField {
+                object,
+                field,
+                value,
+                line,
+                column,
+            } => ASTNode::SetField {
+                object: Box::new(self.lift_node(object)),
+                field: field.clone(),
+                value: Box::new(self.lift_node(value)),
+                line: *line,
+                column: *column,
+            },
             ASTNode::Index {
                 array,
                 index,
@@ -191,6 +212,37 @@ impl LambdaLifter {
                 line: *line,
                 column: *column,
             },
+            ASTNode::SetVar {
+                name,
+                value,
+                line,
+                column,
+            } => ASTNode::SetVar {
+                name: name.clone(),
+                value: Box::new(self.lift_node(value)),
+                line: *line,
+                column: *column,
+            },
+            ASTNode::WhileExpr {
+                condition,
+                body,
+                line,
+                column,
+            } => ASTNode::WhileExpr {
+                condition: Box::new(self.lift_node(condition)),
+                body: Box::new(self.lift_node(body)),
+                line: *line,
+                column: *column,
+            },
+            ASTNode::DoExpr {
+                exprs,
+                line,
+                column,
+            } => ASTNode::DoExpr {
+                exprs: exprs.iter().map(|e| self.lift_node(e)).collect(),
+                line: *line,
+                column: *column,
+            },
         }
     }
 
@@ -214,14 +266,18 @@ impl LambdaLifter {
         self.lambda_counter += 1;
         let func_name = format!("_lambda_{id}");
 
-        // Register this lambda's lifted name (and its closure-constructor
-        // placeholder, used below in the captures path) as globals *before*
-        // any enclosing lambda gets to analyze its own free variables --
-        // otherwise a reference to this lambda's lifted name/constructor,
-        // appearing in an *outer* lambda's body, would be mistaken for a
-        // captured variable instead of a reference to a global function.
+        // Register this lambda's lifted name as a global *before* any
+        // enclosing lambda gets to analyze its own free variables --
+        // otherwise a reference to this lambda's lifted name, appearing in
+        // an *outer* lambda's body (e.g. as the `function_name` of a nested
+        // `MakeClosure`), would be mistaken for a captured variable instead
+        // of a reference to a global function. (There used to be a second
+        // insertion here for a `__make_closure_{func_name}` placeholder
+        // global -- that's gone now along with the placeholder `Call` node
+        // it named, since capturing lambdas lower to a dedicated
+        // `MakeClosure` node below instead of a call to a made-up function
+        // name that nothing ever defined.)
         self.globals.insert(func_name.clone());
-        self.globals.insert(format!("__make_closure_{func_name}"));
 
         if free_vars.is_empty() {
             self.lifted_functions.push(ASTNode::FunctionDef {
@@ -240,13 +296,18 @@ impl LambdaLifter {
             };
         }
 
-        // Captures path: no test program currently exercises this. Captured
-        // fields default to i64 (this MVP's fallback numeric type) since
-        // there's no typed-AST plumbing at this stage to know their real
-        // types; the closure "construction" below is a placeholder call
-        // rather than a real allocation, since the AST has no struct-literal
-        // node. Nothing downstream (koi-assembly doesn't exist yet) consumes
-        // this, so it's documented as unverified rather than fully solved.
+        // Captures path. Field types below are still hardcoded to i64 in
+        // this StructDef -- that's legacy/vestigial at this point and isn't
+        // consulted by `ir_generator.rs` for anything real: real closure
+        // construction (env struct alloc + field stores with each
+        // captured variable's *actual* type + the shared `Closure` wrapper)
+        // happens in `ir_generator.rs`'s `MakeClosure` handling, which runs
+        // after monomorphization and lambda-lifting, so it has real,
+        // concrete types available via its own `self.lookup` -- unlike
+        // here, where only names are known. This StructDef is kept only so
+        // that existing tests asserting an env struct's *field names* (not
+        // types) keep passing; nothing downstream depends on its declared
+        // field types.
         let env_struct_name = format!("_Lambda_{id}_Env");
         let mut captured: Vec<String> = free_vars.iter().cloned().collect();
         captured.sort();
@@ -274,20 +335,16 @@ impl LambdaLifter {
             column,
         });
 
-        ASTNode::Call {
-            function: Box::new(ASTNode::Variable {
-                name: format!("__make_closure_{func_name}"),
-                line,
-                column,
-            }),
-            arguments: captured
-                .into_iter()
-                .map(|v| ASTNode::Variable {
-                    name: v,
-                    line,
-                    column,
-                })
-                .collect(),
+        // Actual closure construction (env struct alloc + field stores +
+        // the shared two-field `Closure` wrapper) happens in
+        // `ir_generator.rs`, which runs strictly after monomorphization --
+        // this stage only has captured *names*, not types, so it just marks
+        // "construct a closure here, capturing these names" via this
+        // dedicated node rather than emitting a placeholder call to a
+        // function name nothing ever defines.
+        ASTNode::MakeClosure {
+            function_name: func_name.clone(),
+            captured,
             line,
             column,
         }
@@ -362,6 +419,10 @@ fn collect_free_variables(
             collect_free_variables(body, &inner_bound, globals, free);
         }
         ASTNode::FieldAccess { object, .. } => collect_free_variables(object, bound, globals, free),
+        ASTNode::SetField { object, value, .. } => {
+            collect_free_variables(object, bound, globals, free);
+            collect_free_variables(value, bound, globals, free);
+        }
         ASTNode::Index { array, index, .. } => {
             collect_free_variables(array, bound, globals, free);
             collect_free_variables(index, bound, globals, free);
@@ -380,6 +441,39 @@ fn collect_free_variables(
             }
         }
         ASTNode::Program { .. } | ASTNode::FunctionDef { .. } | ASTNode::StructDef { .. } => {}
+        ASTNode::MakeClosure { captured, .. } => {
+            // Each captured name is a *use*, exactly like a bare `Variable`
+            // reference -- relevant for the rare case of a lambda nested
+            // inside another capturing lambda, where an inner
+            // `MakeClosure`'s captured name may itself need to be captured
+            // by the *outer* lambda currently being analyzed.
+            for name in captured {
+                if !bound.contains(name) && !globals.contains(name) {
+                    free.insert(name.clone());
+                }
+            }
+        }
+        ASTNode::SetVar { name, value, .. } => {
+            // The assignment target is itself a use, exactly like a bare
+            // `Variable` reference -- it must be captured if it isn't a
+            // local binding or a global.
+            if !bound.contains(name) && !globals.contains(name) {
+                free.insert(name.clone());
+            }
+            collect_free_variables(value, bound, globals, free);
+        }
+        ASTNode::WhileExpr {
+            condition, body, ..
+        } => {
+            // Unlike `loop`, `while` introduces no binding of its own.
+            collect_free_variables(condition, bound, globals, free);
+            collect_free_variables(body, bound, globals, free);
+        }
+        ASTNode::DoExpr { exprs, .. } => {
+            for e in exprs {
+                collect_free_variables(e, bound, globals, free);
+            }
+        }
     }
 }
 
@@ -405,6 +499,34 @@ fn rewrite_free_var_access(node: &ASTNode, free_vars: &HashSet<String>) -> ASTNo
         | ASTNode::StructDef { .. }
         | ASTNode::Program { .. }
         | ASTNode::FunctionDef { .. } => node.clone(),
+        ASTNode::MakeClosure {
+            function_name,
+            captured,
+            line,
+            column,
+        } => {
+            // NOTE (nested-closure limitation, deliberately not solved
+            // here): `captured` is a list of plain variable *names*, not
+            // `ASTNode`s -- there's no sub-node here to swap in a
+            // `FieldAccess { object: env, .. }` the way a bare `Variable`
+            // reference gets rewritten above. If one of these names is
+            // *itself* a free variable of an OUTER capturing lambda (i.e. a
+            // lambda capturing a variable that itself contains another
+            // capturing lambda), this inner `MakeClosure`'s `captured` list
+            // would need to source that name from the outer lambda's own
+            // `env` rather than a plain local for the generated code to be
+            // correct -- that genuinely-nested-closures case is out of
+            // scope for this MVP and is left unhandled. The common,
+            // single-level case needs no rewrite here: `captured` already
+            // only contains names that are genuinely local to the function
+            // this `MakeClosure` sits inside.
+            ASTNode::MakeClosure {
+                function_name: function_name.clone(),
+                captured: captured.clone(),
+                line: *line,
+                column: *column,
+            }
+        }
         ASTNode::Call {
             function,
             arguments,
@@ -507,6 +629,19 @@ fn rewrite_free_var_access(node: &ASTNode, free_vars: &HashSet<String>) -> ASTNo
             line: *line,
             column: *column,
         },
+        ASTNode::SetField {
+            object,
+            field,
+            value,
+            line,
+            column,
+        } => ASTNode::SetField {
+            object: Box::new(rewrite_free_var_access(object, free_vars)),
+            field: field.clone(),
+            value: Box::new(rewrite_free_var_access(value, free_vars)),
+            line: *line,
+            column: *column,
+        },
         ASTNode::Index {
             array,
             index,
@@ -555,6 +690,49 @@ fn rewrite_free_var_access(node: &ASTNode, free_vars: &HashSet<String>) -> ASTNo
             column,
         } => ASTNode::ArrayLiteral {
             elements: elements
+                .iter()
+                .map(|e| rewrite_free_var_access(e, free_vars))
+                .collect(),
+            line: *line,
+            column: *column,
+        },
+        ASTNode::SetVar {
+            name,
+            value,
+            line,
+            column,
+        } => {
+            // Rewriting the *target* of a `set!` when it refers to a
+            // captured/free variable (i.e. mutating a variable through a
+            // closure's environment) is deliberately not handled here --
+            // per the project's documented plan, closures capturing a
+            // `set!`-mutated variable are unsupported/undefined behavior for
+            // this MVP. Only the value expression is rewritten; `name`
+            // passes through unchanged.
+            ASTNode::SetVar {
+                name: name.clone(),
+                value: Box::new(rewrite_free_var_access(value, free_vars)),
+                line: *line,
+                column: *column,
+            }
+        }
+        ASTNode::WhileExpr {
+            condition,
+            body,
+            line,
+            column,
+        } => ASTNode::WhileExpr {
+            condition: Box::new(rewrite_free_var_access(condition, free_vars)),
+            body: Box::new(rewrite_free_var_access(body, free_vars)),
+            line: *line,
+            column: *column,
+        },
+        ASTNode::DoExpr {
+            exprs,
+            line,
+            column,
+        } => ASTNode::DoExpr {
+            exprs: exprs
                 .iter()
                 .map(|e| rewrite_free_var_access(e, free_vars))
                 .collect(),

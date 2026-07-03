@@ -210,6 +210,39 @@ fn struct_field_access_resolves_via_unique_field_name() {
 }
 
 #[test]
+fn set_field_yields_unit_and_constrains_value_to_the_field_type() {
+    let prog = program(vec![
+        defstruct("Point", vec![("x", "i64"), ("y", "i64")]),
+        defn(
+            "set-x",
+            vec![("p", None), ("v", None)],
+            set_field(var("p"), "x", var("v")),
+        ),
+    ]);
+    let functions = infer(&prog).unwrap();
+    assert_eq!(
+        fn_type(&functions, "set-x"),
+        Type::Function {
+            params: vec![Type::Struct("Point".to_string()), Type::Int64],
+            return_type: Box::new(Type::Unit),
+        }
+    );
+}
+
+#[test]
+fn set_field_wrong_value_type_is_rejected() {
+    let prog = program(vec![
+        defstruct("Point", vec![("x", "i64"), ("y", "i64")]),
+        defn(
+            "bad-set-x",
+            vec![("p", None)],
+            set_field(var("p"), "x", string_lit("oops")),
+        ),
+    ]);
+    assert!(infer(&prog).is_err());
+}
+
+#[test]
 fn ambiguous_field_name_falls_back_without_erroring() {
     let prog = program(vec![
         defstruct("A", vec![("x", "i64")]),
@@ -286,6 +319,44 @@ fn new_returns_a_pointer_for_a_primitive_type() {
 }
 
 #[test]
+fn new_returns_the_array_type_for_an_arr_prefixed_type_name() {
+    // Regression test: `parse_type_str` used to treat any non-primitive
+    // name (including koi-assembly's "arr_T" mangled-array convention) as a
+    // struct name, so `(new arr_i64 ...)` would infer to
+    // `Pointer<Struct("arr_i64")>` instead of `Array<Int64>`.
+    let prog = program(vec![defn(
+        "f",
+        vec![],
+        new_expr("arr_i64", Some(int(160))),
+    )]);
+    let functions = infer(&prog).unwrap();
+    assert_eq!(
+        fn_type(&functions, "f"),
+        Type::Function {
+            params: vec![],
+            return_type: Box::new(Type::Array(Box::new(Type::Int64)))
+        }
+    );
+}
+
+#[test]
+fn new_returns_the_array_type_for_a_nested_arr_prefixed_type_name() {
+    let prog = program(vec![defn(
+        "f",
+        vec![],
+        new_expr("arr_f64", Some(int(80))),
+    )]);
+    let functions = infer(&prog).unwrap();
+    assert_eq!(
+        fn_type(&functions, "f"),
+        Type::Function {
+            params: vec![],
+            return_type: Box::new(Type::Array(Box::new(Type::Float64)))
+        }
+    );
+}
+
+#[test]
 fn index_returns_the_array_element_type() {
     let prog = program(vec![defn(
         "f",
@@ -300,6 +371,139 @@ fn index_returns_the_array_element_type() {
             return_type: Box::new(Type::Int64)
         }
     );
+}
+
+#[test]
+fn set_var_yields_unit_type() {
+    let prog = program(vec![defn(
+        "f",
+        vec![],
+        let_binding(vec![("a", int(1))], set_var("a", int(2))),
+    )]);
+    let functions = infer(&prog).unwrap();
+    assert_eq!(
+        fn_type(&functions, "f"),
+        Type::Function {
+            params: vec![],
+            return_type: Box::new(Type::Unit)
+        }
+    );
+}
+
+#[test]
+fn set_var_requires_same_type_as_existing_binding() {
+    let prog = program(vec![defn(
+        "f",
+        vec![],
+        let_binding(vec![("a", int(1))], set_var("a", bool_lit(true))),
+    )]);
+    let err = infer(&prog).unwrap_err();
+    assert!(err.contains("Type mismatch"), "unexpected error: {err}");
+}
+
+#[test]
+fn set_var_of_undeclared_name_is_reported() {
+    let prog = program(vec![defn("f", vec![], set_var("z", int(1)))]);
+    let err = infer(&prog).unwrap_err();
+    assert!(err.contains("not declared"), "unexpected error: {err}");
+    assert!(err.contains("'z'"), "unexpected error: {err}");
+}
+
+#[test]
+fn while_yields_unit_type() {
+    let prog = program(vec![defn(
+        "f",
+        vec![],
+        while_expr(bool_lit(false), int(1)),
+    )]);
+    let functions = infer(&prog).unwrap();
+    assert_eq!(
+        fn_type(&functions, "f"),
+        Type::Function {
+            params: vec![],
+            return_type: Box::new(Type::Unit)
+        }
+    );
+}
+
+#[test]
+fn while_requires_a_bool_condition() {
+    // `n`'s condition use forces it to Bool, but the arithmetic in the body
+    // forces it to Int64 -- an unresolved type var would let either
+    // constraint win silently, so this needs both to pin the conflict down.
+    let prog = program(vec![defn(
+        "f",
+        vec![("n", None)],
+        while_expr(var("n"), call_named("+", vec![var("n"), int(1)])),
+    )]);
+    let err = infer(&prog).unwrap_err();
+    assert!(err.contains("Type mismatch"), "unexpected error: {err}");
+}
+
+#[test]
+fn do_expr_yields_the_last_expressions_type() {
+    let prog = program(vec![defn(
+        "f",
+        vec![],
+        do_expr(vec![int(1), bool_lit(true), string_lit("x")]),
+    )]);
+    let functions = infer(&prog).unwrap();
+    assert_eq!(
+        fn_type(&functions, "f"),
+        Type::Function {
+            params: vec![],
+            return_type: Box::new(Type::String)
+        }
+    );
+}
+
+#[test]
+fn empty_do_expr_is_rejected() {
+    let prog = program(vec![defn("f", vec![], do_expr(vec![]))]);
+    let err = infer(&prog).unwrap_err();
+    assert!(err.contains("'do'"), "unexpected error: {err}");
+}
+
+#[test]
+fn aset_infers_array_element_type_and_yields_unit() {
+    let prog = program(vec![defn(
+        "f",
+        vec![("arr", None)],
+        call_named("aset!", vec![var("arr"), int(0), int(5)]),
+    )]);
+    let functions = infer(&prog).unwrap();
+    assert_eq!(
+        fn_type(&functions, "f"),
+        Type::Function {
+            params: vec![Type::Array(Box::new(Type::Int64))],
+            return_type: Box::new(Type::Unit)
+        }
+    );
+}
+
+#[test]
+fn aset_wrong_arg_count_is_rejected() {
+    let prog = program(vec![defn(
+        "f",
+        vec![("arr", None)],
+        call_named("aset!", vec![var("arr"), int(0)]),
+    )]);
+    let err = infer(&prog).unwrap_err();
+    assert!(err.contains("aset!"), "unexpected error: {err}");
+}
+
+#[test]
+fn aset_value_type_must_match_element_type() {
+    let prog = program(vec![defn(
+        "f",
+        vec![],
+        call_named(
+            "aset!",
+            vec![array_literal(vec![int(1), int(2)]), int(0), bool_lit(true)],
+        ),
+    )]);
+    let err = infer(&prog).unwrap_err();
+    assert!(err.contains("Type mismatch"), "unexpected error: {err}");
 }
 
 #[test]

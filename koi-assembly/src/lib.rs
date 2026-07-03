@@ -2,11 +2,13 @@ pub mod abi;
 pub mod codegen;
 pub mod ir_parser;
 pub mod optimizer;
+pub mod peephole;
 pub mod register_allocator;
 
 use codegen::X86Generator;
 use ir_parser::IRParser;
 use optimizer::Optimizer;
+use peephole::Peephole;
 use serde::Serialize;
 
 #[derive(Debug, Clone, Serialize)]
@@ -55,7 +57,8 @@ impl CompileError {
 pub fn compile_ir_json_to_assembly(ir_json: &str) -> Result<String, CompileError> {
     let mut program = IRParser::parse_json(ir_json).map_err(|e| CompileError::new("ir_parser", e))?;
     Optimizer::optimize_program(&mut program);
-    X86Generator::new().generate(&program).map_err(|e| CompileError::new("codegen", e))
+    let asm = X86Generator::new().generate(&program).map_err(|e| CompileError::new("codegen", e))?;
+    Ok(Peephole::optimize(&asm))
 }
 
 pub fn compile_ir_file_to_output(input: &str, output: &str) -> Result<(), CompileError> {

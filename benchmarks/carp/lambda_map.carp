@@ -1,0 +1,16 @@
+; NOTA: sintaxis a validar con `carp --check lambda_map.carp` -- no probada
+; localmente (Carp no esta instalado en este entorno, ver BENCHMARK_REPORT.md).
+; Pipeline map -> filter -> reduce con closures que capturan factor/threshold.
+
+(defn main []
+  (let [n 1000000
+        data (Array.replicate n &0)]
+    (do
+      (for [i 0 n]
+        (Array.aset! &data i i))
+      (let [factor 3
+            doubled (Array.copy-map &(fn [x] (Long.* @x factor)) &data)
+            threshold 500000
+            kept (Array.copy-filter &(fn [x] (Long.> @x threshold)) &doubled)
+            sum (Array.reduce &(fn [acc x] (Long.+ acc @x)) 0 &kept)]
+        (println* sum)))))

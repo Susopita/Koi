@@ -136,7 +136,11 @@ fn instruction_uses(instruction: &Instruction) -> Vec<String> {
         Instruction::Phi { incoming, .. } => incoming.iter().map(|(_, value)| value.clone()).collect(),
         Instruction::Alloc { size, .. } => size.iter().cloned().collect(),
         Instruction::GetField { object, .. } => vec![object.clone()],
+        Instruction::SetField { object, value, .. } => vec![object.clone(), value.clone()],
         Instruction::GetIndex { array, index, .. } => vec![array.clone(), index.clone()],
+        Instruction::SetIndex { array, index, value, .. } => {
+            vec![array.clone(), index.clone(), value.clone()]
+        }
         Instruction::AddrOf { operand, .. } => vec![operand.clone()],
         Instruction::Deref { operand, .. } => vec![operand.clone()],
     }

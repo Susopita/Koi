@@ -114,4 +114,11 @@ fn mangled_name_covers_every_type_variant() {
         "fn_i64_i64_to_i64"
     );
     assert_eq!(Type::Variable(TypeVar { id: 7 }).mangled_name(), "T7");
+    assert_eq!(Type::Unit.mangled_name(), "unit");
+}
+
+#[test]
+fn apply_leaves_unit_unchanged() {
+    let subst = Substitution::new();
+    assert_eq!(subst.apply(&Type::Unit), Type::Unit);
 }
