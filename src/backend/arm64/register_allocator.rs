@@ -38,6 +38,163 @@ const RESERVED: &[&str] = &["x29", "x30"];
 const NUM_REGS: usize = 10;
 
 // ---------------------------------------------------------------------------
+// Control-flow graph
+// ---------------------------------------------------------------------------
+
+/// Predecessor and successor maps indexed by block label.
+#[derive(Debug, Clone)]
+struct ControlFlow {
+    predecessors: HashMap<String, Vec<String>>,
+    successors: HashMap<String, Vec<String>>,
+}
+
+/// Build the CFG from a list of selected blocks by inspecting the last
+/// op of each block (B, BCond, Ret, or fall-through end).
+fn build_cfg(blocks: &[SelectedBlock]) -> ControlFlow {
+    let mut preds: HashMap<String, Vec<String>> = HashMap::new();
+    let mut succs: HashMap<String, Vec<String>> = HashMap::new();
+
+    for (i, block) in blocks.iter().enumerate() {
+        let label = &block.label;
+        succs.entry(label.clone()).or_default();
+
+        if let Some(last) = block.ops.last() {
+            match last {
+                A64Op::B { label: target } => {
+                    succs.get_mut(label).unwrap().push(target.clone());
+                    preds.entry(target.clone()).or_default().push(label.clone());
+                }
+                A64Op::BCond { label: target, .. } => {
+                    // Conditional branch: both the target and fall-through
+                    // (next block) are successors.
+                    succs.get_mut(label).unwrap().push(target.clone());
+                    preds.entry(target.clone()).or_default().push(label.clone());
+                    if i + 1 < blocks.len() {
+                        let next = &blocks[i + 1].label;
+                        succs.get_mut(label).unwrap().push(next.clone());
+                        preds.entry(next.clone()).or_default().push(label.clone());
+                    }
+                }
+                A64Op::Ret => {
+                    // No successors — return from function.
+                }
+                _ => {
+                    // Last op is not a terminator → fall-through to next
+                    // block (if any).  This handles blocks ending in e.g.
+                    // an unconditional print or a direct jump that's
+                    // implicit from the IR structure.
+                    if i + 1 < blocks.len() {
+                        let next = &blocks[i + 1].label;
+                        succs.get_mut(label).unwrap().push(next.clone());
+                        preds.entry(next.clone()).or_default().push(label.clone());
+                    }
+                }
+            }
+        } else if i + 1 < blocks.len() {
+            // Empty block — still falls through to the next one.
+            let next = &blocks[i + 1].label;
+            succs.get_mut(label).unwrap().push(next.clone());
+            preds.entry(next.clone()).or_default().push(label.clone());
+        }
+    }
+
+    ControlFlow {
+        predecessors: preds,
+        successors: succs,
+    }
+}
+
+/// Compute live-in and live-out for every block via dataflow analysis.
+///
+/// Returns a vector parallel to `blocks` — each entry is the set of SSA
+/// value names that are live on entry to that block.
+fn compute_block_liveness(blocks: &[SelectedBlock]) -> Vec<HashSet<String>> {
+    let cfg = build_cfg(blocks);
+
+    // Per-block use/def sets (value names, not registers).
+    let mut use_set: Vec<HashSet<String>> = vec![HashSet::new(); blocks.len()];
+    let mut def_set: Vec<HashSet<String>> = vec![HashSet::new(); blocks.len()];
+    // Map block label → block index.
+    let label_to_idx: HashMap<&str, usize> = blocks
+        .iter()
+        .enumerate()
+        .map(|(i, b)| (b.label.as_str(), i))
+        .collect();
+
+    for (i, block) in blocks.iter().enumerate() {
+        let mut seen_defs: HashSet<String> = HashSet::new();
+        for op in &block.ops {
+            if let Some(d) = op_defines(op) {
+                if !seen_defs.contains(&d) {
+                    // If a use of `d` appears before its definition, `d`
+                    // is a use-before-def (live-in candidate).  We check
+                    // that via the reverse scan below.
+                    seen_defs.insert(d.clone());
+                    def_set[i].insert(d);
+                }
+            }
+        }
+
+        // Reverse scan: uses before any definition are uses.
+        let mut seen_in_reverse: HashSet<String> = HashSet::new();
+        for op in block.ops.iter().rev() {
+            let used = op_uses(op);
+            let defined = op_defines(op);
+
+            if let Some(d) = &defined {
+                seen_in_reverse.insert(d.clone());
+            }
+            for u in used {
+                if !seen_in_reverse.contains(&u) && !def_set[i].contains(&u) {
+                    use_set[i].insert(u);
+                }
+            }
+        }
+    }
+
+    // Dataflow fixpoint:
+    //   in[b]  = use[b] ∪ (out[b] - def[b])
+    //   out[b] = ∪ in[s]   for each successor s
+    let mut in_set: Vec<HashSet<String>> = vec![HashSet::new(); blocks.len()];
+    let mut out_set: Vec<HashSet<String>> = vec![HashSet::new(); blocks.len()];
+
+    let mut changed = true;
+    while changed {
+        changed = false;
+
+        for i in 0..blocks.len() {
+            // out[b] = union of in[s] for each successor
+            let mut new_out: HashSet<String> = HashSet::new();
+            if let Some(succs) = cfg.successors.get(&blocks[i].label) {
+                for succ_label in succs {
+                    if let Some(&succ_idx) = label_to_idx.get(succ_label.as_str()) {
+                        new_out.extend(in_set[succ_idx].iter().cloned());
+                    }
+                }
+            }
+            if new_out != out_set[i] {
+                changed = true;
+                out_set[i] = new_out;
+            }
+
+            // in[b] = use[b] ∪ (out[b] - def[b])
+            let mut new_in = use_set[i].clone();
+            for val in out_set[i].iter() {
+                if !def_set[i].contains(val) {
+                    new_in.insert(val.clone());
+                }
+            }
+            if new_in != in_set[i] {
+                changed = true;
+                in_set[i] = new_in;
+            }
+        }
+    }
+
+    in_set
+}
+
+// ---------------------------------------------------------------------------
 // Interference graph
 // ---------------------------------------------------------------------------
 
@@ -125,20 +282,29 @@ impl InterferenceGraph {
     }
 
     /// Build the interference graph from a list of selected blocks.
+    ///
+    /// Uses multi-block liveness analysis: for each block, computes
+    /// `live_in` via dataflow fixpoint over the control-flow graph, then
+    /// builds interference edges between every pair of simultaneously-live
+    /// values within the block.
     pub fn from_blocks(blocks: &[SelectedBlock]) -> Self {
         let mut graph = InterferenceGraph::new();
 
-        for block in blocks {
-            // Collect all value names defined in this block.
-            let mut defs_in_block: Vec<String> = Vec::new();
+        // ---- Phase 1: live-in per block via dataflow fixpoint ----
+        let live_in = compute_block_liveness(blocks);
+
+        // ---- Phase 2: build interference edges ----
+        for (block_idx, block) in blocks.iter().enumerate() {
+            // Start with values that are live on entry from predecessor blocks.
+            let mut live_defs: Vec<String> = live_in[block_idx].iter().cloned().collect();
+
             for op in &block.ops {
-                // Collect any register names (SSA values) referenced.
                 let used = op_uses(op);
                 let defined = op_defines(op);
 
                 // Every use interferes with every other live definition.
                 for u in &used {
-                    for d in &defs_in_block {
+                    for d in &live_defs {
                         if u != d {
                             graph.interfere(u, d);
                         }
@@ -147,12 +313,12 @@ impl InterferenceGraph {
 
                 // The defined value interferes with all currently-live defs.
                 if let Some(d) = &defined {
-                    for other in &defs_in_block {
+                    for other in &live_defs {
                         if d != other {
                             graph.interfere(d, other);
                         }
                     }
-                    defs_in_block.push(d.clone());
+                    live_defs.push(d.clone());
                 }
 
                 // Coalescing: if this is a MovReg, source and dest can coalesce.
