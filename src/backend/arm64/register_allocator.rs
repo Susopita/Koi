@@ -34,9 +34,6 @@ const ALL_REGS: &[&str] = &[
 /// x0-x1 are used for ABI argument passing and return values.
 const RESERVED: &[&str] = &["x29", "x30"];
 
-/// Number of allocatable registers (10 callee-saved).
-const NUM_REGS: usize = 10;
-
 // ---------------------------------------------------------------------------
 // Control-flow graph
 // ---------------------------------------------------------------------------
@@ -651,15 +648,17 @@ fn try_merge_pair(first: &A64Op, second: &A64Op) -> Option<A64Op> {
 /// coloured in the interference graph.
 ///
 /// For each spilled value:
-///   - Allocate a stack slot at `frame_size - 16 * slot_index`
+///   - Allocate a stack slot at `slot_offset` (growing downward from 0)
 ///   - After the op that defines the value, insert a `Str` to the slot
 ///   - Before each op that uses the value, insert a `Ldr` from the slot
 ///   - Update `func.frame_size` to reflect the total spill area
-fn insert_spill_code(func: &mut SelectedFunction, spills: &[String], _assignment: &HashMap<String, String>) {
-    let mut slot_offset = func.frame_size;
-
+///
+/// `slot_offset` is the running offset counter (starts at 0, goes more
+/// negative with each spill). It persists across multiple calls so that
+/// subsequent spill batches allocate slots below previous ones.
+fn insert_spill_code(func: &mut SelectedFunction, spills: &[String], _assignment: &HashMap<String, String>, slot_offset: &mut i64) {
     for spill_name in spills {
-        slot_offset -= 16; // each spill slot is 16 bytes
+        *slot_offset -= 16; // each spill slot is 16 bytes
 
         for block in &mut func.blocks {
             let mut new_ops: Vec<A64Op> = Vec::new();
@@ -671,7 +670,7 @@ fn insert_spill_code(func: &mut SelectedFunction, spills: &[String], _assignment
                 if used.iter().any(|u| u == spill_name) {
                     new_ops.push(A64Op::Ldr {
                         rd: spill_name.clone(),
-                        addr: AddressingMode::BaseOffset("sp".to_string(), slot_offset),
+                        addr: AddressingMode::BaseOffset("sp".to_string(), *slot_offset),
                         ty: "i64".to_string(),
                     });
                 }
@@ -682,7 +681,7 @@ fn insert_spill_code(func: &mut SelectedFunction, spills: &[String], _assignment
                 if defined.as_ref() == Some(spill_name) {
                     new_ops.push(A64Op::Str {
                         rs: spill_name.clone(),
-                        addr: AddressingMode::BaseOffset("sp".to_string(), slot_offset),
+                        addr: AddressingMode::BaseOffset("sp".to_string(), *slot_offset),
                         ty: "i64".to_string(),
                     });
                 }
@@ -733,6 +732,17 @@ pub fn allocate_registers(functions: &mut [SelectedFunction]) {
         let max_iterations = 10;
         let mut iteration = 0;
 
+        // Track values that have already been spilled so that the Ldr
+        // instructions inserted by insert_spill_code (which re-define the
+        // spilled virtual register) do not trigger infinite spill/recolour
+        // loops.
+        let mut already_spilled: HashSet<String> = HashSet::new();
+        // Running stack-slot offset used by insert_spill_code. Starts at 0
+        // and grows more negative with each spill slot. Persists across
+        // multiple insert_spill_code calls so that later spills get slots
+        // below earlier ones.
+        let mut spill_slot_offset: i64 = 0;
+
         loop {
             iteration += 1;
 
@@ -753,17 +763,42 @@ pub fn allocate_registers(functions: &mut [SelectedFunction]) {
             }
 
             // Detect spill candidates: values defined by any op that have
-            // no colour assignment.
+            // no colour assignment and have not been spilled before.
+            // already_spilled prevents the Ldr instructions that reload
+            // spilled values from being detected as new spill candidates.
             let spills: Vec<String> = func
                 .blocks
                 .iter()
                 .flat_map(|b| b.ops.iter())
                 .filter_map(|op| op_defines(op))
-                .filter(|d| !is_phys_reg(d) && !assignment.contains_key(d))
+                .filter(|d| {
+                    !is_phys_reg(d) && !assignment.contains_key(d) && !already_spilled.contains(d)
+                })
                 .collect();
 
             if spills.is_empty() || iteration >= max_iterations {
                 // No more spills — apply assignment.
+
+                // Assign caller-saved temporaries (x9-x15) to any remaining
+                // unallocated virtual registers (spilled values that couldn't
+                // be recoloured).  These are safe because the spill code
+                // (Ldr/Str) brackets each use/def tightly — the temp only
+                // lives for one adjacent load-use or def-store pair.
+                let mut spill_temp = 0u64;
+                for block in &func.blocks {
+                    for op in &block.ops {
+                        for r in all_regs_in_op(op) {
+                            if !is_phys_reg(&r) && !assignment.contains_key(&r) {
+                                assignment.insert(
+                                    r.clone(),
+                                    format!("x{}", 9 + (spill_temp % 7)),
+                                );
+                                spill_temp += 1;
+                            }
+                        }
+                    }
+                }
+
                 for block in &mut func.blocks {
                     for op in &mut block.ops {
                         rewrite_op(op, &assignment);
@@ -774,8 +809,12 @@ pub fn allocate_registers(functions: &mut [SelectedFunction]) {
                 break;
             }
 
+            for s in &spills {
+                already_spilled.insert(s.clone());
+            }
+
             // Insert spill code for uncoloured values and loop again.
-            insert_spill_code(func, &spills, &assignment);
+            insert_spill_code(func, &spills, &assignment, &mut spill_slot_offset);
         }
     }
 }

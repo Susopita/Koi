@@ -134,16 +134,39 @@ fn builtin_logical_forces_bool_operands() {
 }
 
 #[test]
-fn let_binding_is_sequential() {
+fn let_binding_sequential_references_work() {
+    // Sequential let (let*-style): a binding can reference previous ones
+    // in the same let.
     let prog = program(vec![defn(
         "f",
         vec![],
         let_binding(
-            vec![
-                ("a", int(1)),
-                ("b", call_named("+", vec![var("a"), int(1)])),
-            ],
+            vec![("a", int(1)), ("b", call_named("+", vec![var("a"), int(1)]))],
             var("b"),
+        ),
+    )]);
+    let functions = infer(&prog).unwrap();
+    assert_eq!(
+        fn_type(&functions, "f"),
+        Type::Function {
+            params: vec![],
+            return_type: Box::new(Type::Int64)
+        }
+    );
+}
+
+#[test]
+fn let_binding_nested_works() {
+    // Nested let still works: outer binding visible in inner's scope.
+    let prog = program(vec![defn(
+        "f",
+        vec![],
+        let_binding(
+            vec![("a", int(1))],
+            let_binding(
+                vec![("b", call_named("+", vec![var("a"), int(1)]))],
+                var("b"),
+            ),
         ),
     )]);
     let functions = infer(&prog).unwrap();

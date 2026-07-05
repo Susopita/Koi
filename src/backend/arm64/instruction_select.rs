@@ -762,6 +762,12 @@ pub fn try_if_conversion_function(func: &IRFunction) -> Option<Vec<SelectedBlock
         }
 
         let mut result = Vec::new();
+
+        // Include all blocks before the matched branch block.
+        for b in func.blocks.iter().take(i) {
+            result.push(select_block(b, func));
+        }
+
         result.push(SelectedBlock {
             label: block.label.clone(),
             ops,

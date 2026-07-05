@@ -603,8 +603,11 @@ fn make_closure_allocates_an_env_struct_with_the_captured_variables_real_type() 
             "main",
             vec![],
             let_binding(
-                vec![("factor", float(2.5)), ("c", make_closure("_lambda_0", vec!["factor"]))],
-                call_named("c", vec![int(5)]),
+                vec![("factor", float(2.5))],
+                let_binding(
+                    vec![("c", make_closure("_lambda_0", vec!["factor"]))],
+                    call_named("c", vec![int(5)]),
+                ),
             ),
         ),
         defn(

@@ -87,8 +87,11 @@ fn let_binding_does_not_leak_into_a_different_function() {
 }
 
 #[test]
-fn let_bindings_see_earlier_bindings_in_the_same_let() {
+fn let_bindings_are_sequential_can_see_each_other() {
+    // Sequential (let*-style): each binding can reference previous ones.
     assert_ok("(defn f [] (let [a 1 b (+ a 1)] b))");
+    // Nested let works: outer binding is visible in inner's scope.
+    assert_ok("(defn f [] (let [a 1] (let [b (+ a 1)] b)))");
 }
 
 #[test]

@@ -8,9 +8,7 @@ use crate::backend::TargetBackend;
 use crate::backend::CompileError;
 use crate::middle_end::ir::IRProgram;
 use crate::backend::optimizer::Optimizer;
-use self::instruction_select::{select_instructions, emit_assembly};
-use self::optimizer::optimise_selected;
-use self::regalloc::allocate_and_frame;
+
 
 /// RISC-V code generation backend.
 pub struct Backend;

@@ -9,9 +9,7 @@ use crate::backend::TargetBackend;
 use crate::backend::CompileError;
 use crate::middle_end::ir::IRProgram;
 use crate::backend::optimizer::Optimizer;
-use self::instruction_select::{select_instructions, emit_assembly};
-use self::materializer::materialize_constants;
-use self::register_allocator::allocate_registers;
+
 
 /// ARM64 code generation backend.
 pub struct Backend;

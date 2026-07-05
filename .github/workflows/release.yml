@@ -19,6 +19,7 @@ jobs:
       - uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
           target: x86_64-unknown-linux-gnu
+          rustflags: ''
       - name: Install system deps
         run: sudo apt-get update && sudo apt-get install -y gcc
       - name: cargo test
@@ -51,17 +52,16 @@ jobs:
       - uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
           target: ${{ matrix.target }}
+          rustflags: ''
       - name: Install system deps (Linux)
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y gcc
       - name: Build release
         run: cargo build --release --target ${{ matrix.target }}
-      - name: Package binaries
+      - name: Package binary
         run: |
           mkdir -p dist
-          for bin in koi-ast koi-ir koi-assembly; do
-            cp target/${{ matrix.target }}/release/$bin dist/
-          done
+          cp target/${{ matrix.target }}/release/koi dist/koi
           cd dist
           tar czf ../${{ matrix.archive }} .
       - name: Upload artifact

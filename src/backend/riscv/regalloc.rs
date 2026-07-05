@@ -21,7 +21,7 @@
 //! 5. Rewrite all ops to use physical register names.
 
 use std::collections::{HashMap, HashSet};
-use crate::backend::riscv::instruction_select::{RiscVOp, SelectedBlock, SelectedFunction};
+use crate::backend::riscv::instruction_select::{RiscVOp, SelectedFunction};
 
 // ---------------------------------------------------------------------------
 // Register pools

@@ -16,7 +16,7 @@
 //!
 //! Result: at most 4 instructions, often 2-3 for typical constants.
 
-use crate::backend::arm64::instruction_select::{A64Op, SelectedFunction, SelectedBlock};
+use crate::backend::arm64::instruction_select::{A64Op, SelectedFunction};
 
 /// Run the materializer over a list of selected functions.
 pub fn materialize_constants(functions: &mut [SelectedFunction]) {
@@ -120,6 +120,7 @@ fn emit_greedy(ops: &mut Vec<A64Op>, rd: &str, value: u64) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::backend::arm64::instruction_select::SelectedBlock;
 
     fn run(source: &[A64Op]) -> Vec<A64Op> {
         let mut func = SelectedFunction {

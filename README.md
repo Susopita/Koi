@@ -59,7 +59,9 @@ koi build --dump-ast programa.carp
 | [BUILD.md](docs/BUILD.md) | Compilar desde cero, requisitos, solución de problemas |
 | [BENCHMARKS.md](docs/BENCHMARKS.md) | Resultados detallados, metodología, análisis |
 | [TESTS.md](docs/TESTS.md) | Cobertura, suites, cómo ejecutar |
+| [COMPILER_INTERFACE.md](docs/COMPILER_INTERFACE.md) | Interfaz del compilador, flags y opciones |
+| [FEATURES.md](docs/FEATURES.md) | Características soportadas del lenguaje y limitaciones |
 
 ## Licencia
 
-Apache 2.0
+MIT

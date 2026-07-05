@@ -232,14 +232,13 @@ impl TypeInferer {
                 Ok(ret_ty.clone())
             }
 
-            // -- let binding ------------------------------------------------
+            // -- let binding (sequential / let*-style) -----------------------
             TypedExpr::Let(bindings, body, body_ty) => {
-                let mut local_scope = HashMap::new();
+                self.scopes.push(HashMap::new());
                 for (name, val) in bindings {
                     let val_ty = self.infer_expr(val)?;
-                    local_scope.insert(name.clone(), val_ty);
+                    self.scopes.last_mut().unwrap().insert(name.clone(), val_ty);
                 }
-                self.scopes.push(local_scope);
                 let inferred = self.infer_expr(body)?;
                 self.scopes.pop();
                 self.constrain(body_ty.clone(), inferred, "let body", 0, 0);

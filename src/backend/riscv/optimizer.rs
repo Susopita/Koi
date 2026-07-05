@@ -19,7 +19,7 @@
 
 use std::collections::HashMap;
 
-use crate::backend::riscv::instruction_select::{RiscVOp, SelectedBlock, SelectedFunction};
+use crate::backend::riscv::instruction_select::{RiscVOp, SelectedFunction};
 
 // ---------------------------------------------------------------------------
 // Per-block value table (LVN for memory)
@@ -317,7 +317,7 @@ pub fn optimise_selected(functions: &mut [SelectedFunction]) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::backend::riscv::instruction_select::{AddressingMode, RiscVOp};
+    use crate::backend::riscv::instruction_select::{AddressingMode, RiscVOp, SelectedBlock};
 
     fn block(ops: Vec<RiscVOp>) -> SelectedBlock {
         SelectedBlock {

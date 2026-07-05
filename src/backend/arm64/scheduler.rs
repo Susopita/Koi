@@ -51,18 +51,32 @@ struct DagNode {
 // ---------------------------------------------------------------------------
 
 /// Reorder the operations in a basic block to minimise stalls.
-/// Returns the scheduled operations.
+///
+/// Terminators (B, BCond, Ret) are excluded from the scheduling DAG —
+/// they always remain at the end of the block in their original order.
+/// Only non-terminator instructions are reordered to hide latencies.
 pub fn schedule_block(ops: &[A64Op]) -> Vec<A64Op> {
-    if ops.len() <= 2 {
+    // ---- Phase 0: Separate terminators ----
+    // Terminators must stay at the end of the block and are not part of
+    // the scheduling DAG.  Extract them first, schedule only the rest.
+    let is_term = |op: &A64Op| -> bool {
+        matches!(op, A64Op::B { .. } | A64Op::BCond { .. } | A64Op::Ret)
+    };
+
+    let non_terms: Vec<&A64Op> = ops.iter().filter(|op| !is_term(op)).collect();
+    let terms: Vec<&A64Op> = ops.iter().filter(|op| is_term(op)).collect();
+
+    if non_terms.len() <= 2 {
+        // Not enough schedulable instructions to benefit from reordering.
         return ops.to_vec();
     }
 
-    // ---- Phase 1: Build the DAG ----
-    let n = ops.len();
+    // ---- Phase 1: Build the DAG (from non-terminator ops only) ----
+    let n = non_terms.len();
     let mut nodes: Vec<DagNode> = (0..n)
         .map(|i| DagNode {
             _index: i,
-            latency: op_latency(&ops[i]),
+            latency: op_latency(non_terms[i]),
             preds: Vec::new(),
             succs: Vec::new(),
             height: 0,
@@ -70,14 +84,12 @@ pub fn schedule_block(ops: &[A64Op]) -> Vec<A64Op> {
         })
         .collect();
 
-    // For tracking the most recent write to each register.
-    // Maps reg_name → (index, op_kind) where op_kind is "write" or "read".
     let mut last_write: HashMap<String, usize> = HashMap::new();
     let mut last_read: HashMap<String, Vec<usize>> = HashMap::new();
 
     for i in 0..n {
-        let defs = op_defines(&ops[i]);
-        let uses = op_uses(&ops[i]);
+        let defs = op_defines(non_terms[i]);
+        let uses = op_uses(non_terms[i]);
 
         // ---- RAW edges: this instruction reads what a previous wrote ----
         for u in &uses {
@@ -105,7 +117,6 @@ pub fn schedule_block(ops: &[A64Op]) -> Vec<A64Op> {
         // Update tracking.
         for d in &defs {
             last_write.insert(d.clone(), i);
-            // A write also acts as a read barrier for the same reg.
             last_read.remove(d);
         }
         for u in &uses {
@@ -114,8 +125,6 @@ pub fn schedule_block(ops: &[A64Op]) -> Vec<A64Op> {
     }
 
     // ---- Phase 2: Compute critical-path heights (backward) ----
-    // Height = max over successors of (succ.latency + succ.height)
-    // We walk indices in reverse so that successors are already computed.
     for i in (0..n).rev() {
         let max_succ = nodes[i]
             .succs
@@ -126,14 +135,12 @@ pub fn schedule_block(ops: &[A64Op]) -> Vec<A64Op> {
         nodes[i].height = max_succ;
     }
 
-    // ---- Phase 3: List scheduling ----
-    // Ready set: instructions whose all predecessors have been scheduled.
+    // ---- Phase 3: List scheduling (non-terminators only) ----
     let mut remaining: HashSet<usize> = (0..n).collect();
     let mut ready: BinaryHeap<Reverse<PriorityNode>> = BinaryHeap::new();
-    let mut scheduled: Vec<A64Op> = Vec::with_capacity(n);
+    let mut scheduled: Vec<A64Op> = Vec::with_capacity(n + terms.len());
     let mut cycle: u32 = 0;
 
-    // Seed the ready set with nodes that have no predecessors.
     for i in 0..n {
         if nodes[i].preds.is_empty() {
             ready.push(Reverse(PriorityNode {
@@ -148,10 +155,8 @@ pub fn schedule_block(ops: &[A64Op]) -> Vec<A64Op> {
         let i = pn.index;
         cycle = cycle.max(pn.cycle_ready);
 
-        // Issue the instruction.
-        scheduled.push(ops[i].clone());
+        scheduled.push(non_terms[i].clone());
 
-        // Clone successors to avoid simultaneous borrow conflicts.
         let succs: Vec<usize> = nodes[i].succs.clone();
         for &s in &succs {
             let start = cycle + nodes[i].latency;
@@ -169,6 +174,8 @@ pub fn schedule_block(ops: &[A64Op]) -> Vec<A64Op> {
         remaining.remove(&i);
     }
 
+    // ---- Phase 4: Append terminators in their original order ----
+    scheduled.extend(terms.into_iter().cloned());
     scheduled
 }
 
@@ -251,10 +258,12 @@ fn op_uses(op: &A64Op) -> Vec<String> {
             vec!["ctrl".to_string()]
         }
         A64Op::Blr { reg } => {
-            let mut v = vec!["ctrl".to_string(), reg.clone()];
+            let v = vec!["ctrl".to_string(), reg.clone()];
             v
         }
-        A64Op::PrintI64Arg { reg } | A64Op::PrintStringArg { reg } | A64Op::PrintF64Arg { reg } => vec![reg.clone()],
+        A64Op::PrintI64Arg { reg } | A64Op::PrintStringArg { reg } | A64Op::PrintF64Arg { reg } => {
+            vec!["ctrl".to_string(), reg.clone()]
+        }
         A64Op::MovReg { rm, .. } => vec![rm.clone()],
         A64Op::Str { rs, addr, .. } | A64Op::StrFloat { rs, addr } => {
             let mut v = vec![rs.clone()];
@@ -329,8 +338,16 @@ fn op_defines(op: &A64Op) -> Vec<String> {
         A64Op::Ldp { rt1, rt2, .. } => vec![rt1.clone(), rt2.clone()],
         A64Op::Cmp { .. } | A64Op::CmpImm { .. } | A64Op::FCmp { .. } => vec!["nzcv".to_string()],
         // Chain control-flow ops to prevent reordering across them.
-        A64Op::B { .. } | A64Op::BCond { .. } | A64Op::Bl { .. }
-        | A64Op::Blr { .. } | A64Op::Ret => vec!["ctrl".to_string()],
+        // Calls define both control (for ordering) and x0 (return value
+        // register), so the scheduler knows argument MovReg instructions
+        // cannot be moved past the call.
+        A64Op::Bl { .. } | A64Op::Blr { .. } => {
+            vec!["ctrl".to_string(), "x0".to_string()]
+        }
+        A64Op::B { .. } | A64Op::BCond { .. } | A64Op::Ret
+        | A64Op::PrintI64Arg { .. } | A64Op::PrintStringArg { .. } | A64Op::PrintF64Arg { .. } => {
+            vec!["ctrl".to_string()]
+        }
         _ => vec![],
     }
 }
