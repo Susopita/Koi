@@ -245,11 +245,15 @@ impl LinearScanAllocator {
             ends.insert(param_name.clone(), 0);
         }
 
+        let param_names: Vec<&str> = function.parameters.iter().map(|(n, _)| n.as_str()).collect();
+
         for block in &function.blocks {
             for instruction in &block.instructions {
                 for used in instruction_uses(instruction) {
-                    starts.entry(used.clone()).or_insert(position);
-                    ends.insert(used, position);
+                    if used.starts_with('%') || param_names.contains(&used.as_str()) {
+                        starts.entry(used.clone()).or_insert(position);
+                        ends.insert(used, position);
+                    }
                 }
                 if let Some(result) = instruction.result_name() {
                     starts.entry(result.to_string()).or_insert(position);
