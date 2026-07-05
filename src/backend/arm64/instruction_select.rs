@@ -1214,13 +1214,14 @@ pub fn emit_assembly(functions: &[SelectedFunction]) -> String {
     out.push_str(".text\n");
 
     for func in functions {
+        let sym = sanitize_symbol(&func.name);
         out.push_str(".balign 4\n");
-        out.push_str(&format!(".globl {}\n", func.name));
+        out.push_str(&format!(".globl {}\n", sym));
         if func.name == "main" {
             out.push_str(".globl _main\n");
             out.push_str("_main:\n");
         }
-        out.push_str(&format!("{}:\n", func.name));
+        out.push_str(&format!("{}:\n", sym));
 
         // Prologue: save frame pointer, link register, and callee-saved regs.
         out.push_str("\tstp x29, x30, [sp, #-16]!\n");
@@ -1241,22 +1242,21 @@ pub fn emit_assembly(functions: &[SelectedFunction]) -> String {
 
         for block in &func.blocks {
             if !block.label.starts_with("__") && block.label != "entry" {
-                out.push_str(&format!(".L{}:\n", block.label));
+                out.push_str(&format!(".L{}_{}:\n", sym, block.label));
             }
-            let mut prev_was_branch = false;
             for op in &block.ops {
                 // Replace Ret with branch to epilogue so callee-saved + fp/lr
                 // are restored properly. The epilogue's final ret handles return.
                 if matches!(op, A64Op::Ret) {
-                    out.push_str(&format!("\tb .L{}_end\n", func.name));
+                    out.push_str(&format!("\tb .L{}_end\n", sym));
                 } else {
-                    emit_op(&mut out, op, &user_fns);
+                    emit_op(&mut out, op, &user_fns, &sym);
                 }
             }
         }
 
         // Epilogue: restore callee-saved registers (reverse order), then fp/lr.
-        out.push_str(&format!(".L{}_end:\n", func.name));
+        out.push_str(&format!(".L{}_end:\n", sym));
         if func.frame_size > 0 {
             out.push_str(&format!("\tadd sp, sp, #{}\n", func.frame_size));
         }
@@ -1276,7 +1276,7 @@ pub fn emit_assembly(functions: &[SelectedFunction]) -> String {
     out
 }
 
-fn emit_op(out: &mut String, op: &A64Op, user_fns: &std::collections::HashSet<String>) {
+fn emit_op(out: &mut String, op: &A64Op, user_fns: &std::collections::HashSet<String>, func_sym: &str) {
     // Symbol name mangling for Mach-O (macOS) vs ELF (Linux).
     let mangle = |name: &str| -> String {
         if cfg!(target_os = "macos") && !user_fns.contains(name) {
@@ -1409,13 +1409,19 @@ fn emit_op(out: &mut String, op: &A64Op, user_fns: &std::collections::HashSet<St
 
         // -- Branch & call -------------------------------------------------
         A64Op::B { label } => {
-            out.push_str(&format!("\tb .L{}\n", label));
+            out.push_str(&format!("\tb .L{}_{}\n", func_sym, label));
         }
         A64Op::BCond { cond, label } => {
-            out.push_str(&format!("\tb.{} .L{}\n", cond, label));
+            out.push_str(&format!("\tb.{} .L{}_{}\n", cond, func_sym, label));
         }
         A64Op::Bl { label } => {
-            out.push_str(&format!("\tbl {}\n", mangle(label)));
+            let sym = sanitize_symbol(label);
+            let is_user = user_fns.contains(label);
+            if cfg!(target_os = "macos") && !is_user {
+                out.push_str(&format!("\tbl _{}\n", sym));
+            } else {
+                out.push_str(&format!("\tbl {}\n", sym));
+            }
         }
         A64Op::Blr { reg } => {
             out.push_str(&format!("\tblr {}\n", reg));
@@ -1514,7 +1520,7 @@ fn write_mem(out: &mut String, mnemonic: &str, reg: &str, addr: &AddressingMode)
         } => {
             if let Some((kind, amount)) = shift {
                 out.push_str(&format!(
-                    "\t{} {}, [{}, {}, {} #{}\n",
+                    "\t{} {}, [{}, {}, {} #{}]\n",
                     mnemonic,
                     reg,
                     base,
@@ -1626,4 +1632,24 @@ fn detect_shift(_name: &str) -> Option<(ShiftKind, u8)> {
 /// If `name` is a constant that is a power of two, return the shift amount.
 fn is_power_of_two_shift(_name: &str) -> Option<u8> {
     None
+}
+
+/// Replace characters that are invalid in assembly labels (e.g. `-`)
+/// with underscores.
+fn sanitize_symbol(name: &str) -> String {
+    let mut sym = String::with_capacity(name.len());
+    for ch in name.chars() {
+        if ch.is_ascii_alphanumeric() || ch == '_' {
+            sym.push(ch);
+        } else {
+            sym.push('_');
+        }
+    }
+    if sym.is_empty() {
+        "_".to_string()
+    } else if sym.as_bytes()[0].is_ascii_digit() {
+        format!("_{}", sym)
+    } else {
+        sym
+    }
 }
