@@ -8,9 +8,10 @@
 //!
 //! # Allocatable registers
 //!
-//! 14 general-purpose registers: `%rax`, `%rbx`, `%rcx`, `%rdx`, `%rsi`,
-//! `%rdi`, `%r8`–`%r15`.  `%rbp` and `%rsp` are reserved for the frame
-//! pointer and stack pointer respectively.
+//! 11 general-purpose registers: `%rcx`, `%rdx`, `%rsi`, `%rdi`, `%r8`–`%r9`,
+//! `%rbx`, `%r12`–`%r15`. `%rax`, `%r10`, and `%r11` are reserved as scratch
+//! registers for code generation, and `%rbp` and `%rsp` are reserved for the
+//! frame pointer and stack pointer respectively.
 
 use crate::backend::x86_64::abi::AMD64ABI;
 use crate::middle_end::ir::{IRFunction, Instruction};
@@ -21,12 +22,14 @@ use std::collections::HashMap;
 // ---------------------------------------------------------------------------
 
 const GP_REGISTERS: &[&str] = &[
-    "%rax", "%rbx", "%rcx", "%rdx", "%rsi", "%rdi", "%r8", "%r9", "%r10",
-    "%r11", "%r12", "%r13", "%r14", "%r15",
+    // Caller-saved registers first (preferred)
+    "%rcx", "%rdx", "%rsi", "%rdi", "%r8", "%r9",
+    // Callee-saved registers last
+    "%rbx", "%r12", "%r13", "%r14", "%r15",
 ];
 
 /// Number of allocatable GP registers.
-const NUM_GPR: usize = 14;
+const NUM_GPR: usize = 11;
 
 // ---------------------------------------------------------------------------
 // Value location
