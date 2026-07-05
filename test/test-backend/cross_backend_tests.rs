@@ -124,6 +124,36 @@ fn arm64_emit_has_arch_directive() {
 }
 
 #[test]
+fn arm64_mul_by_power_of_two_becomes_lsl_not_mul() {
+    let ir = r#"{
+  "irType": "hir",
+  "functions": [{
+    "name": "times_eight",
+    "returnType": "i64",
+    "parameters": [["x", "i64"]],
+    "blocks": [{
+      "label": "entry",
+      "instructions": [
+        {"op": "const", "result": "%v0", "value": 8, "type": "i64"},
+        {"op": "binop", "result": "%v1", "lhs": "x", "rhs": "%v0", "op_type": "*", "type": "i64"},
+        {"op": "return", "value": "%v1"}
+      ]
+    }]
+  }]
+}"#;
+    let asm = compile_ir_json_to_assembly(ir, TargetArch::Arm64)
+        .expect("arm64 mul-by-power-of-two codegen should succeed");
+    assert!(
+        asm.contains("lsl"),
+        "arm64 should emit lsl for x * 8, got asm:\n{asm}"
+    );
+    assert!(
+        !asm.contains("mul"),
+        "arm64 should NOT emit mul for x * 8, got asm:\n{asm}"
+    );
+}
+
+#[test]
 fn arm64_movz_or_movk_for_constants() {
     let asm = compile_ir_json_to_assembly(add_ir(), TargetArch::Arm64)
         .expect("arm64 codegen should succeed");
