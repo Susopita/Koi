@@ -521,11 +521,54 @@ fn select_block(block: &BasicBlock, _func: &IRFunction) -> SelectedBlock {
         };
     }
 
-    // Phase 2: Maximal Munch on each instruction.
+    // Phase 2: Build value_map (Const value → i64) and shift_map
+    // (shift-result value → (source_name, ShiftKind, amount)).  These let
+    // munch_instruction fold barrel-shifter operands into ALU ops using the
+    // shift's *source* register (e.g. `add r0, r1, r2, lsl #3` where r2 is
+    // the pre-shift value, not the already-shifted result).
+    let mut value_map: std::collections::HashMap<String, i64> = std::collections::HashMap::new();
+    let mut shift_map: std::collections::HashMap<String, (String, ShiftKind, u8)> =
+        std::collections::HashMap::new();
+
+    for instr in &block.instructions {
+        match instr {
+            Instruction::Const { result, value, .. } => {
+                if let Some(n) = value.as_i64() {
+                    value_map.insert(result.clone(), n);
+                }
+            }
+            Instruction::BinOp {
+                result,
+                lhs,
+                rhs,
+                op_type,
+                ..
+            } => {
+                let kind = match op_type.as_str() {
+                    "<<" => Some(ShiftKind::Lsl),
+                    ">>" => Some(ShiftKind::Lsr),
+                    _ => None,
+                };
+                if let Some(kind) = kind {
+                    if let Some(&amount) = value_map.get(rhs) {
+                        if (1..64).contains(&amount) {
+                            // Store (source_name, kind, amount) so that the
+                            // consuming ALU op can use `source_name, lsl #N`.
+                            shift_map.insert(result.clone(), (lhs.clone(), kind, amount as u8));
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    // Phase 3: Maximal Munch on each instruction.
     let mut i = 0;
     while i < block.instructions.len() {
         let instr = &block.instructions[i];
-        let consumed = munch_instruction(instr, &block.instructions[i..], &mut ops);
+        let consumed =
+            munch_instruction(instr, &block.instructions[i..], &mut ops, &shift_map);
         i += consumed.max(1);
     }
 
@@ -697,8 +740,9 @@ pub fn try_if_conversion_function(func: &IRFunction) -> Option<Vec<SelectedBlock
             .iter()
             .filter(|instr| !matches!(instr, Instruction::Phi { .. }))
             .collect();
+        let empty_map = std::collections::HashMap::new();
         for instr in &non_phi {
-            munch_instruction(instr, &[], &mut ops);
+            munch_instruction(instr, &[], &mut ops, &empty_map);
         }
 
         let mut result = Vec::new();
@@ -758,6 +802,7 @@ fn munch_instruction(
     instr: &Instruction,
     _suffix: &[Instruction],
     ops: &mut Vec<A64Op>,
+    shift_map: &std::collections::HashMap<String, (String, ShiftKind, u8)>,
 ) -> usize {
     match instr {
         Instruction::Const { result, value, ty } => {
@@ -820,11 +865,12 @@ fn munch_instruction(
                 "+" => {
                     // Try to fold into shifted-register form if rhs is
                     // a shift operation (constant small shift).
-                    if let Some((shift_kind, amount)) = detect_shift(rhs) {
+                    // Use the shift's *source* register, not the result of the shift.
+                    if let Some((source, shift_kind, amount)) = shift_map.get(rhs) {
                         ops.push(A64Op::Add {
                             rd: result.clone(),
                             rn: lhs.clone(),
-                            rm: ExtendedReg::shifted(rhs, shift_kind, amount),
+                            rm: ExtendedReg::shifted(source, *shift_kind, *amount),
                             ty: ty.clone(),
                         });
                     } else {
@@ -837,11 +883,11 @@ fn munch_instruction(
                     }
                 }
                 "-" => {
-                    if let Some((shift_kind, amount)) = detect_shift(rhs) {
+                    if let Some((source, shift_kind, amount)) = shift_map.get(rhs) {
                         ops.push(A64Op::Sub {
                             rd: result.clone(),
                             rn: lhs.clone(),
-                            rm: ExtendedReg::shifted(rhs, shift_kind, amount),
+                            rm: ExtendedReg::shifted(source, *shift_kind, *amount),
                             ty: ty.clone(),
                         });
                     } else {
@@ -1632,16 +1678,6 @@ fn binop_cond_to_arm64(op: &str) -> String {
         "!=" => "ne".to_string(),
         _ => "ne".to_string(),
     }
-}
-
-/// Check if `name` refers to an IR value that is the result of a `Const`
-/// or a shift-by-constant operation, returning the shift kind and amount.
-fn detect_shift(_name: &str) -> Option<(ShiftKind, u8)> {
-    // Full implementation requires looking up the defining instruction
-    // from the IR program.  Since we process one instruction at a time,
-    // this is a forward-declared placeholder that a future version can
-    // populate by consulting an instruction-def map.
-    None
 }
 
 /// If `name` is a constant that is a power of two, return the shift amount.
