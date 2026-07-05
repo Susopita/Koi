@@ -372,7 +372,7 @@ fn op_uses(op: &A64Op) -> Vec<String> {
             add_addr_uses(&mut v, addr);
             v
         }
-        A64Op::PrintI64Arg { reg } | A64Op::PrintStringArg { reg } => vec![reg.clone()],
+        A64Op::PrintI64Arg { reg } | A64Op::PrintStringArg { reg } | A64Op::PrintF64Arg { reg } => vec![reg.clone()],
         _ => vec![],
     }
 }
@@ -663,7 +663,7 @@ fn rewrite_op(op: &mut A64Op, assignment: &HashMap<String, String>) {
         A64Op::FCmp { rn, rm } => { *rn = phys(rn); *rm = phys(rm); }
         A64Op::FMov { rd, rm } => { *rd = phys(rd); *rm = phys(rm); }
         A64Op::FMovImm { rd, .. } => { *rd = phys(rd); }
-        A64Op::PrintI64Arg { reg } | A64Op::PrintStringArg { reg } => {
+        A64Op::PrintI64Arg { reg } | A64Op::PrintStringArg { reg } | A64Op::PrintF64Arg { reg } => {
             *reg = phys(reg);
         }
         A64Op::B { .. } | A64Op::BCond { .. } | A64Op::Bl { .. }

@@ -258,6 +258,9 @@ pub enum A64Op {
     /// `reg` is the virtual register holding the value to print.
     PrintI64Arg { reg: String },
     PrintStringArg { reg: String },
+    /// Print a f64 value via printf (pseudo-op, handled at emission).
+    /// `reg` is the virtual register (GPR) holding the float bits.
+    PrintF64Arg { reg: String },
 }
 
 // ---------------------------------------------------------------------------
@@ -521,27 +524,30 @@ fn select_block(block: &BasicBlock, _func: &IRFunction) -> SelectedBlock {
         };
     }
 
-    // Phase 2: Build value_map (Const value → i64) and shift_map
-    // (shift-result value → (source_name, ShiftKind, amount)).  These let
-    // munch_instruction fold barrel-shifter operands into ALU ops using the
-    // shift's *source* register (e.g. `add r0, r1, r2, lsl #3` where r2 is
-    // the pre-shift value, not the already-shifted result).
+    // Phase 2: Build value_map (Const value → i64), shift_map
+    // (shift-result value → (source_name, ShiftKind, amount)), and type_map
+    // (value name → IR type string).  These let munch_instruction fold
+    // barrel-shifter operands into ALU ops and emit type-specific print
+    // pseudo-ops.
     let mut value_map: std::collections::HashMap<String, i64> = std::collections::HashMap::new();
     let mut shift_map: std::collections::HashMap<String, (String, ShiftKind, u8)> =
         std::collections::HashMap::new();
+    let mut type_map: std::collections::HashMap<String, String> = std::collections::HashMap::new();
 
     for instr in &block.instructions {
         match instr {
-            Instruction::Const { result, value, .. } => {
+            Instruction::Const { result, value, ty } => {
                 if let Some(n) = value.as_i64() {
                     value_map.insert(result.clone(), n);
                 }
+                type_map.insert(result.clone(), ty.clone());
             }
             Instruction::BinOp {
                 result,
                 lhs,
                 rhs,
                 op_type,
+                ty,
                 ..
             } => {
                 let kind = match op_type.as_str() {
@@ -558,6 +564,14 @@ fn select_block(block: &BasicBlock, _func: &IRFunction) -> SelectedBlock {
                         }
                     }
                 }
+                type_map.insert(result.clone(), ty.clone());
+            }
+            Instruction::Call { result, ty, .. } => {
+                if let Some(r) = result {
+                    if let Some(t) = ty {
+                        type_map.insert(r.clone(), t.clone());
+                    }
+                }
             }
             _ => {}
         }
@@ -568,7 +582,7 @@ fn select_block(block: &BasicBlock, _func: &IRFunction) -> SelectedBlock {
     while i < block.instructions.len() {
         let instr = &block.instructions[i];
         let consumed =
-            munch_instruction(instr, &block.instructions[i..], &mut ops, &shift_map, &value_map);
+            munch_instruction(instr, &block.instructions[i..], &mut ops, &shift_map, &value_map, &type_map);
         i += consumed.max(1);
     }
 
@@ -742,8 +756,9 @@ pub fn try_if_conversion_function(func: &IRFunction) -> Option<Vec<SelectedBlock
             .collect();
         let empty_map = std::collections::HashMap::new();
         let empty_valmap = std::collections::HashMap::new();
+        let empty_typemap = std::collections::HashMap::new();
         for instr in &non_phi {
-            munch_instruction(instr, &[], &mut ops, &empty_map, &empty_valmap);
+            munch_instruction(instr, &[], &mut ops, &empty_map, &empty_valmap, &empty_typemap);
         }
 
         let mut result = Vec::new();
@@ -805,6 +820,7 @@ fn munch_instruction(
     ops: &mut Vec<A64Op>,
     shift_map: &std::collections::HashMap<String, (String, ShiftKind, u8)>,
     value_map: &std::collections::HashMap<String, i64>,
+    type_map: &std::collections::HashMap<String, String>,
 ) -> usize {
     match instr {
         Instruction::Const { result, value, ty } => {
@@ -1026,11 +1042,16 @@ fn munch_instruction(
             ty,
         } => {
             if function == "print" {
-                // Emit a platform-agnostic pseudo-op.  The emitter
-                // (emit_op) will handle macOS (args on stack) vs
-                // Linux (args in registers).
+                // Emit a type-specific print pseudo-op.  The emitter
+                // (emit_op) handles the platform ABI (macOS vs Linux)
+                // and loads the correct format string (.LC_print_*).
                 if let Some(arg) = arguments.first() {
-                    ops.push(A64Op::PrintI64Arg { reg: arg.clone() });
+                    let arg_ty = type_map.get(arg).map(String::as_str).unwrap_or("i64");
+                    match arg_ty {
+                        "string" => ops.push(A64Op::PrintStringArg { reg: arg.clone() }),
+                        "f64" => ops.push(A64Op::PrintF64Arg { reg: arg.clone() }),
+                        _ => ops.push(A64Op::PrintI64Arg { reg: arg.clone() }),
+                    }
                 }
                 if let Some(r) = result {
                     ops.push(A64Op::MovReg {
@@ -1466,6 +1487,22 @@ fn emit_op(out: &mut String, op: &A64Op, user_fns: &std::collections::HashSet<St
                 out.push_str(&format!("\tmov x1, {}\n", reg));
                 out.push_str("\tadrp x0, .LC_print_string\n");
                 out.push_str("\tadd x0, x0, :lo12:.LC_print_string\n");
+                out.push_str(&format!("\tbl {}\n", mangle("printf")));
+            }
+        }
+        A64Op::PrintF64Arg { reg } => {
+            // f64 values pass in d0 (float register), format with "%f\n"
+            if cfg!(target_os = "macos") {
+                out.push_str(&format!("\tfmov d0, {}\n", reg));
+                out.push_str(&format!("\tstr d0, [sp, #-16]!\n"));
+                out.push_str("\tadrp x0, .LC_print_f64@PAGE\n");
+                out.push_str("\tadd x0, x0, .LC_print_f64@PAGEOFF\n");
+                out.push_str(&format!("\tbl {}\n", mangle("printf")));
+                out.push_str("\tadd sp, sp, #16\n");
+            } else {
+                out.push_str(&format!("\tfmov d0, {}\n", reg));
+                out.push_str("\tadrp x0, .LC_print_f64\n");
+                out.push_str("\tadd x0, x0, :lo12:.LC_print_f64\n");
                 out.push_str(&format!("\tbl {}\n", mangle("printf")));
             }
         }

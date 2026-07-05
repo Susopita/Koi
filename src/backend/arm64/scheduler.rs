@@ -254,7 +254,7 @@ fn op_uses(op: &A64Op) -> Vec<String> {
             let mut v = vec!["ctrl".to_string(), reg.clone()];
             v
         }
-        A64Op::PrintI64Arg { reg } | A64Op::PrintStringArg { reg } => vec![reg.clone()],
+        A64Op::PrintI64Arg { reg } | A64Op::PrintStringArg { reg } | A64Op::PrintF64Arg { reg } => vec![reg.clone()],
         A64Op::MovReg { rm, .. } => vec![rm.clone()],
         A64Op::Str { rs, addr, .. } | A64Op::StrFloat { rs, addr } => {
             let mut v = vec![rs.clone()];
@@ -433,7 +433,7 @@ fn op_latency(op: &A64Op) -> u32 {
         A64Op::Prologue { .. } | A64Op::Epilogue => 1,
 
         // Print ops
-        A64Op::PrintI64Arg { .. } | A64Op::PrintStringArg { .. } => 1,
+        A64Op::PrintI64Arg { .. } | A64Op::PrintStringArg { .. } | A64Op::PrintF64Arg { .. } => 1,
     }
 }
 

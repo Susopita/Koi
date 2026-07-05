@@ -3,3 +3,11 @@
 shell.nix
 ROADMAP.md
 TASKS.md
+
+# Compiled binaries generados por koi build
+fib
+quicksort
+matrix_sum
+lambda_map
+output.s
+
