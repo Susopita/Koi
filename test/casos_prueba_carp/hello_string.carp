@@ -1,0 +1,3 @@
+(defn main []
+  (let [_ (print "Hello, Pond!")]
+    0))

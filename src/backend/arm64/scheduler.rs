@@ -334,7 +334,8 @@ fn op_defines(op: &A64Op) -> Vec<String> {
         | A64Op::FMul { rd, .. }
         | A64Op::FDiv { rd, .. }
         | A64Op::FMov { rd, .. }
-        | A64Op::FMovImm { rd, .. } => vec![rd.clone()],
+        | A64Op::FMovImm { rd, .. }
+        | A64Op::LoadString { rd, .. } => vec![rd.clone()],
         A64Op::Ldp { rt1, rt2, .. } => vec![rt1.clone(), rt2.clone()],
         A64Op::Cmp { .. } | A64Op::CmpImm { .. } | A64Op::FCmp { .. } => vec!["nzcv".to_string()],
         // Chain control-flow ops to prevent reordering across them.
@@ -451,6 +452,7 @@ fn op_latency(op: &A64Op) -> u32 {
 
         // Print ops
         A64Op::PrintI64Arg { .. } | A64Op::PrintStringArg { .. } | A64Op::PrintF64Arg { .. } => 1,
+        A64Op::LoadString { .. } => 1,
     }
 }
 

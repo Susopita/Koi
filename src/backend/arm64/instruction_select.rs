@@ -261,6 +261,8 @@ pub enum A64Op {
     /// Print a f64 value via printf (pseudo-op, handled at emission).
     /// `reg` is the virtual register (GPR) holding the float bits.
     PrintF64Arg { reg: String },
+    /// Load a string literal's address into a register.
+    LoadString { rd: String, text: String },
 }
 
 // ---------------------------------------------------------------------------
@@ -868,11 +870,9 @@ fn munch_instruction(
                     imm: f,
                 });
             } else if let Some(s) = value.as_str() {
-                // String literal — handled by the emitter via `.rodata`.
-                ops.push(A64Op::Ldr {
+                ops.push(A64Op::LoadString {
                     rd: result.clone(),
-                    addr: AddressingMode::Base(format!(".LC_{}", s.len())),
-                    ty: ty.clone(),
+                    text: s.to_string(),
                 });
             }
             1
@@ -1278,7 +1278,24 @@ pub fn emit_assembly(functions: &[SelectedFunction]) -> String {
     let user_fns: std::collections::HashSet<String> =
         functions.iter().map(|f| f.name.clone()).collect();
 
-    // ---- Format strings for print() -------------------------------------
+    // Collect and deduplicate all string literals.
+    let mut string_literals = std::collections::HashMap::new();
+    let mut next_string_id = 0;
+    for func in functions {
+        for block in &func.blocks {
+            for op in &block.ops {
+                if let A64Op::LoadString { text, .. } = op {
+                    if !string_literals.contains_key(text) {
+                        let label = format!(".LC_str_{}", next_string_id);
+                        next_string_id += 1;
+                        string_literals.insert(text.clone(), label);
+                    }
+                }
+            }
+        }
+    }
+
+    // ---- Format strings for print() and custom string literals ----------
     // On macOS, use __TEXT,__const (Mach-O read-only data section) with
     // adrp + @PAGE/@PAGEOFF addressing.  On ELF, use .rodata with adrp +
     // :lo12: relocation.
@@ -1290,7 +1307,12 @@ pub fn emit_assembly(functions: &[SelectedFunction]) -> String {
         out.push_str(".LC_print_string:\n");
         out.push_str(".asciz \"%s\\n\"\n");
         out.push_str(".LC_print_f64:\n");
-        out.push_str(".asciz \"%f\\n\"\n\n");
+        out.push_str(".asciz \"%f\\n\"\n");
+        for (text, label) in &string_literals {
+            out.push_str(&format!("{}:\n", label));
+            out.push_str(&format!(".asciz {:?}\n", text));
+        }
+        out.push_str("\n");
     } else {
         out.push_str(".section .rodata\n");
         out.push_str(".balign 8\n");
@@ -1299,7 +1321,12 @@ pub fn emit_assembly(functions: &[SelectedFunction]) -> String {
         out.push_str(".LC_print_string:\n");
         out.push_str(".asciz \"%s\\n\"\n");
         out.push_str(".LC_print_f64:\n");
-        out.push_str(".asciz \"%f\\n\"\n\n");
+        out.push_str(".asciz \"%f\\n\"\n");
+        for (text, label) in &string_literals {
+            out.push_str(&format!("{}:\n", label));
+            out.push_str(&format!(".asciz {:?}\n", text));
+        }
+        out.push_str("\n");
     }
     out.push_str(".text\n");
 
@@ -1340,7 +1367,7 @@ pub fn emit_assembly(functions: &[SelectedFunction]) -> String {
                 if matches!(op, A64Op::Ret) {
                     out.push_str(&format!("\tb .L{}_end\n", sym));
                 } else {
-                    emit_op(&mut out, op, &user_fns, &sym);
+                    emit_op(&mut out, op, &user_fns, &sym, &string_literals);
                 }
             }
         }
@@ -1366,7 +1393,13 @@ pub fn emit_assembly(functions: &[SelectedFunction]) -> String {
     out
 }
 
-fn emit_op(out: &mut String, op: &A64Op, user_fns: &std::collections::HashSet<String>, func_sym: &str) {
+fn emit_op(
+    out: &mut String,
+    op: &A64Op,
+    user_fns: &std::collections::HashSet<String>,
+    func_sym: &str,
+    string_literals: &std::collections::HashMap<String, String>,
+) {
     // Symbol name mangling for Mach-O (macOS) vs ELF (Linux).
     let mangle = |name: &str| -> String {
         if cfg!(target_os = "macos") && !user_fns.contains(name) {
@@ -1510,6 +1543,17 @@ fn emit_op(out: &mut String, op: &A64Op, user_fns: &std::collections::HashSet<St
                 out.push_str("\tadrp x0, .LC_print_f64\n");
                 out.push_str("\tadd x0, x0, :lo12:.LC_print_f64\n");
                 out.push_str(&format!("\tbl {}\n", mangle("printf")));
+            }
+        }
+
+        A64Op::LoadString { rd, text } => {
+            let label = string_literals.get(text).expect("string literal must be interned");
+            if cfg!(target_os = "macos") {
+                out.push_str(&format!("\tadrp {}, {}@PAGE\n", rd, label));
+                out.push_str(&format!("\tadd {}, {}, {}@PAGEOFF\n", rd, rd, label));
+            } else {
+                out.push_str(&format!("\tadrp {}, {}\n", rd, label));
+                out.push_str(&format!("\tadd {}, {}, :lo12:{}\n", rd, rd, label));
             }
         }
 

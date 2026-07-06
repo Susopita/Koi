@@ -548,7 +548,8 @@ fn op_defines(op: &A64Op) -> Option<String> {
         | A64Op::FMul { rd, .. }
         | A64Op::FDiv { rd, .. }
         | A64Op::FMov { rd, .. }
-        | A64Op::FMovImm { rd, .. } => Some(rd.clone()),
+        | A64Op::FMovImm { rd, .. }
+        | A64Op::LoadString { rd, .. } => Some(rd.clone()),
 
         A64Op::Ldp { rt1, .. } => {
             // LDP defines two registers; we return the first for
@@ -925,6 +926,7 @@ fn rewrite_op(op: &mut A64Op, assignment: &HashMap<String, String>) {
         A64Op::FCmp { rn, rm } => { *rn = phys(rn); *rm = phys(rm); }
         A64Op::FMov { rd, rm } => { *rd = phys(rd); *rm = phys(rm); }
         A64Op::FMovImm { rd, .. } => { *rd = phys(rd); }
+        A64Op::LoadString { rd, .. } => { *rd = phys(rd); }
         A64Op::PrintI64Arg { reg } | A64Op::PrintStringArg { reg } | A64Op::PrintF64Arg { reg } => {
             *reg = phys(reg);
         }
